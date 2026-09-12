@@ -1,10 +1,17 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
 
-from datetime import datetime, timedelta
 from textwrap import dedent
+
+from src.data import generate_health_data
+from src.analytics import (
+    get_health_summary,
+    get_baseline_status,
+)
+
+from src.anomaly import detect_current_anomaly
+from src.insights import build_anomaly_insight
 
 
 st.set_page_config(
@@ -12,6 +19,82 @@ st.set_page_config(
     page_icon="🌿",
     layout="wide",
 )
+
+
+# Load synthetic health data
+health_data = generate_health_data(
+    days=90,
+    seed=42,
+)
+
+health_summary = get_health_summary(
+    health_data,
+    baseline_days=30,
+)
+
+# Run Mallow's statistical anomaly detector
+anomaly_result = detect_current_anomaly(
+    health_data
+)
+
+mallow_insight = build_anomaly_insight(
+    anomaly_result
+)
+
+latest = health_summary["latest"]
+baseline = health_summary["baseline"]
+z_scores = health_summary["z_scores"]
+
+
+# Helpers for personal baseline status
+def status_for(metric):
+    return get_baseline_status(
+        health_data,
+        metric,
+        days=30,
+    )
+
+
+def status_style(metric):
+    level = status_for(metric)["level"]
+
+    if level == "typical":
+        return "good"
+
+    if level == "watch":
+        return "watch"
+
+    return "unusual"
+
+
+def combined_bp_status():
+    systolic = status_for("systolic_bp")
+    diastolic = status_for("diastolic_bp")
+
+    max_z = max(
+        abs(systolic["z_score"]),
+        abs(diastolic["z_score"]),
+    )
+
+    if max_z < 1:
+        return {
+            "label": "Near your usual range",
+            "level": "typical",
+        }
+
+    if max_z < 2:
+        return {
+            "label": "Somewhat different from baseline",
+            "level": "watch",
+        }
+
+    return {
+        "label": "Unusual for your baseline",
+        "level": "unusual",
+    }
+
+
+bp_status = combined_bp_status()
 
 
 # Sidebar
@@ -46,6 +129,10 @@ if dark_mode:
         "insight_border": "#493D47",
         "good_bg": "#27362B",
         "good_text": "#AED0B6",
+        "watch_bg": "#3A3426",
+        "watch_text": "#D8C597",
+        "unusual_bg": "#3B292B",
+        "unusual_text": "#E1AFB3",
         "neutral_bg": "#393329",
         "neutral_text": "#D7C7A4",
         "chart_bg": "#202720",
@@ -69,6 +156,10 @@ else:
         "insight_border": "#E5D9DF",
         "good_bg": "#EDF5EF",
         "good_text": "#63856D",
+        "watch_bg": "#F4EEDF",
+        "watch_text": "#8B7852",
+        "unusual_bg": "#F5E7E8",
+        "unusual_text": "#97656A",
         "neutral_bg": "#F5F0E6",
         "neutral_text": "#81765F",
         "chart_bg": "#FFFFFF",
@@ -79,7 +170,7 @@ else:
     }
 
 
-# Global styling
+# Styling
 st.markdown(
     f"""
     <style>
@@ -161,24 +252,35 @@ st.markdown(
         margin-bottom: 0.55rem;
     }}
 
-    .status-good {{
+    .status-good,
+    .status-watch,
+    .status-unusual,
+    .status-neutral {{
         display: inline-block;
-        background-color: {colors["good_bg"]};
-        color: {colors["good_text"]};
         border-radius: 999px;
         padding: 0.25rem 0.55rem;
         font-size: 0.74rem;
         margin-top: 0.15rem;
     }}
 
+    .status-good {{
+        background-color: {colors["good_bg"]};
+        color: {colors["good_text"]};
+    }}
+
+    .status-watch {{
+        background-color: {colors["watch_bg"]};
+        color: {colors["watch_text"]};
+    }}
+
+    .status-unusual {{
+        background-color: {colors["unusual_bg"]};
+        color: {colors["unusual_text"]};
+    }}
+
     .status-neutral {{
-        display: inline-block;
         background-color: {colors["neutral_bg"]};
         color: {colors["neutral_text"]};
-        border-radius: 999px;
-        padding: 0.25rem 0.55rem;
-        font-size: 0.74rem;
-        margin-top: 0.15rem;
     }}
 
     .source {{
@@ -196,12 +298,6 @@ st.markdown(
         margin-bottom: 1rem;
     }}
 
-    /* Ask Mallow input */
-
-    [data-testid="stTextInput"] {{
-        margin-top: 0.25rem;
-    }}
-
     [data-testid="stTextInput"] div[data-baseweb="input"] {{
         background-color: {colors["input"]} !important;
         border: 1px solid {colors["border"]} !important;
@@ -210,14 +306,15 @@ st.markdown(
         overflow: hidden !important;
     }}
 
-    [data-testid="stTextInput"] div[data-baseweb="input"]:hover {{
-        border-color: {colors["muted"]} !important;
+    [data-testid="stTextInput"] div[data-baseweb="input"]:focus-within {{
+        border-color: {colors["heading"]} !important;
+        box-shadow: none !important;
     }}
 
-    [data-testid="stTextInput"] div[data-baseweb="input"]:focus-within {{
-        border: 1px solid {colors["heading"]} !important;
+    [data-testid="stTextInput"] div[data-baseweb="base-input"] {{
+        background-color: transparent !important;
+        border: none !important;
         box-shadow: none !important;
-        outline: none !important;
     }}
 
     [data-testid="stTextInput"] input {{
@@ -233,12 +330,6 @@ st.markdown(
     [data-testid="stTextInput"] input::placeholder {{
         color: {colors["muted"]} !important;
         opacity: 1 !important;
-    }}
-
-    [data-testid="stTextInput"] div[data-baseweb="base-input"] {{
-        background-color: transparent !important;
-        border: none !important;
-        box-shadow: none !important;
     }}
 
     [data-testid="stTabs"] button {{
@@ -259,9 +350,11 @@ st.markdown(
 )
 
 
-# HTML helper
 def render_html(content):
-    clean_html = dedent(content).strip()
+    clean_html = " ".join(
+        line.strip()
+        for line in dedent(content).strip().splitlines()
+    )
 
     st.markdown(
         clean_html,
@@ -269,7 +362,6 @@ def render_html(content):
     )
 
 
-# Metric card helper
 def metric_card(
     icon,
     title,
@@ -279,18 +371,12 @@ def metric_card(
     source,
     status_type="good",
 ):
-    status_class = (
-        "status-good"
-        if status_type == "good"
-        else "status-neutral"
-    )
-
     return (
         f'<div class="metric-card">'
         f'<div class="metric-title">{icon} {title}</div>'
         f'<div class="metric-value">{value}</div>'
         f'<div class="metric-detail">{detail}</div>'
-        f'<div class="{status_class}">{status}</div>'
+        f'<div class="status-{status_type}">{status}</div>'
         f'<div class="source">{source}</div>'
         f'</div>'
     )
@@ -314,23 +400,24 @@ render_html(
 )
 
 
-# Welcome card
+# Welcome
 render_html(
     f"""
     <div class="welcome-card">
         <b>Good morning ☀️</b>
         <br><br>
-        Most of your sample measurements are close to your usual range today.
+        Mallow is comparing today's synthetic measurements
+        with your recent personal baseline.
         <br><br>
         <span style="color:{colors["muted"]}">
-            Mallow is currently displaying synthetic demo data.
+            Personal baseline comparisons are not clinical diagnoses.
         </span>
     </div>
     """
 )
 
 
-# Tabs
+# Navigation
 overview_tab, heart_tab, metabolic_tab, sleep_tab = st.tabs(
     [
         "🌿 Overview",
@@ -349,14 +436,20 @@ with overview_tab:
     row1 = st.columns(4)
 
     with row1[0]:
+        heart_status = status_for("resting_hr")
+
         render_html(
             metric_card(
                 "❤️",
-                "Heart rate",
-                "68 bpm",
-                "Resting: 61 bpm",
-                "Within your usual range",
+                "Resting heart rate",
+                f"{latest['resting_hr']:.0f} bpm",
+                (
+                    f"30-day average: "
+                    f"{baseline['resting_hr']:.0f} bpm"
+                ),
+                heart_status["label"],
                 "⌚ Apple Watch",
+                status_style("resting_hr"),
             )
         )
 
@@ -365,34 +458,58 @@ with overview_tab:
             metric_card(
                 "🩸",
                 "Blood pressure",
-                "116 / 72",
-                "MAP: 87 mmHg",
-                "Near your baseline",
+                (
+                    f"{latest['systolic_bp']:.0f} / "
+                    f"{latest['diastolic_bp']:.0f}"
+                ),
+                f"MAP: {latest['map']:.0f} mmHg",
+                bp_status["label"],
                 "🩺 Connected cuff",
+                (
+                    "good"
+                    if bp_status["level"] == "typical"
+                    else bp_status["level"]
+                ),
             )
         )
 
     with row1[2]:
+        glucose_status = status_for("glucose")
+
         render_html(
             metric_card(
                 "🍬",
                 "Blood glucose",
-                "94 mg/dL",
-                "Today's average: 101 mg/dL",
-                "Stable",
+                f"{latest['glucose']:.0f} mg/dL",
+                (
+                    f"30-day average: "
+                    f"{baseline['glucose']:.0f} mg/dL"
+                ),
+                glucose_status["label"],
                 "🩸 CGM / HealthKit",
+                status_style("glucose"),
             )
         )
 
     with row1[3]:
+        oxygen_status = status_for(
+            "oxygen_saturation"
+        )
+
         render_html(
             metric_card(
                 "🫁",
                 "Oxygen saturation",
-                "98%",
-                "Overnight average: 97%",
-                "Typical",
+                (
+                    f"{latest['oxygen_saturation']:.1f}%"
+                ),
+                (
+                    f"30-day average: "
+                    f"{baseline['oxygen_saturation']:.1f}%"
+                ),
+                oxygen_status["label"],
                 "⌚ Apple Watch",
+                status_style("oxygen_saturation"),
             )
         )
 
@@ -401,50 +518,81 @@ with overview_tab:
     row2 = st.columns(4)
 
     with row2[0]:
+        hrv_status = status_for("hrv")
+
         render_html(
             metric_card(
                 "💓",
                 "HRV",
-                "52 ms",
-                "30-day average: 48 ms",
-                "Slightly above baseline",
+                f"{latest['hrv']:.0f} ms",
+                (
+                    f"30-day average: "
+                    f"{baseline['hrv']:.0f} ms"
+                ),
+                hrv_status["label"],
                 "⌚ Apple Watch",
+                status_style("hrv"),
             )
         )
 
     with row2[1]:
+        temp_status = status_for(
+            "wrist_temperature"
+        )
+
         render_html(
             metric_card(
                 "🌡️",
                 "Wrist temperature",
-                "+0.1 °F",
-                "Compared with personal baseline",
-                "Typical",
+                (
+                    f"{latest['wrist_temperature']:+.2f} °F"
+                ),
+                "Deviation from temperature baseline",
+                temp_status["label"],
                 "⌚ Apple Watch",
+                status_style("wrist_temperature"),
             )
         )
 
     with row2[2]:
+        respiratory_status = status_for(
+            "respiratory_rate"
+        )
+
         render_html(
             metric_card(
                 "🌬️",
                 "Respiratory rate",
-                "14.2 / min",
-                "30-day average: 14.6",
-                "Typical",
+                (
+                    f"{latest['respiratory_rate']:.1f} / min"
+                ),
+                (
+                    f"30-day average: "
+                    f"{baseline['respiratory_rate']:.1f}"
+                ),
+                respiratory_status["label"],
                 "⌚ Apple Watch",
+                status_style("respiratory_rate"),
             )
         )
 
     with row2[3]:
+        sleep_status = status_for(
+            "sleep_hours"
+        )
+
         render_html(
             metric_card(
                 "😴",
                 "Sleep",
-                "7 h 34 m",
-                "Deep sleep: 1 h 16 m",
-                "28 min above average",
+                f"{latest['sleep_hours']:.1f} h",
+                (
+                    f"30-day average: "
+                    f"{baseline['sleep_hours']:.1f} h"
+                ),
+                sleep_status["label"],
                 "⌚ Apple Watch",
+                status_style("sleep_hours"),
             )
         )
 
@@ -452,32 +600,18 @@ with overview_tab:
 
     st.subheader("30-day heart trend")
 
-    np.random.seed(42)
+    heart_df = health_data.tail(30).copy()
 
-    dates = [
-        datetime.today() - timedelta(days=i)
-        for i in range(29, -1, -1)
-    ]
-
-    heart_rate = np.random.normal(
-        loc=62,
-        scale=2.5,
-        size=30,
-    )
-
-    heart_df = pd.DataFrame(
-        {
-            "Date": dates,
-            "Resting Heart Rate": heart_rate,
-        }
+    heart_df["date"] = pd.to_datetime(
+        heart_df["date"]
     )
 
     fig = go.Figure()
 
     fig.add_trace(
         go.Scatter(
-            x=heart_df["Date"],
-            y=heart_df["Resting Heart Rate"],
+            x=heart_df["date"],
+            y=heart_df["resting_hr"],
             mode="lines+markers",
             line=dict(
                 color=colors["chart_line"],
@@ -489,14 +623,14 @@ with overview_tab:
             ),
             hovertemplate=(
                 "%{x|%b %d}<br>"
-                "%{y:.0f} bpm"
+                "%{y:.1f} bpm"
                 "<extra></extra>"
             ),
         )
     )
 
     fig.add_hline(
-        y=62,
+        y=baseline["resting_hr"],
         line_dash="dot",
         line_color=colors["chart_average"],
         annotation_text="30-day average",
@@ -543,17 +677,28 @@ with overview_tab:
 
     st.subheader("Mallow noticed 🌱")
 
+    if anomaly_result["is_anomaly"]:
+        insight_heading = (
+            "Today's overall pattern looks unusual "
+            "compared with your recent history."
+        )
+    else:
+        insight_heading = (
+            "Today's overall pattern looks fairly similar "
+            "to your recent history."
+        )
+
     render_html(
-        """
+        f"""
         <div class="insight-card">
-            <b>
-                Your cardiovascular measurements look fairly steady today.
-            </b>
+            <b>{insight_heading}</b>
             <br><br>
-            Your sample HRV is slightly higher than its 30-day average,
-            while your resting heart rate remains close to baseline.
+            {mallow_insight}
             <br><br>
-            No major deviation appears in the current demo data.
+            <span style="color:{colors["muted"]};">
+                Mallow is describing statistical patterns only.
+                This is not a diagnosis or medical interpretation.
+            </span>
         </div>
         """
     )
@@ -562,7 +707,9 @@ with overview_tab:
 
     question = st.text_input(
         "Ask something about your health data",
-        placeholder="Why has my resting heart rate changed this week?",
+        placeholder=(
+            "Why has my resting heart rate changed this week?"
+        ),
         label_visibility="collapsed",
     )
 
@@ -570,11 +717,15 @@ with overview_tab:
         render_html(
             """
             <div class="insight-card">
-                🌿 <b>Mallow isn't connected to its AI brain yet.</b>
+                🌿 <b>
+                    Mallow isn't connected to its AI brain yet.
+                </b>
+
                 <br><br>
-                Eventually, this response will use your measurements,
-                personal baselines, trends, and detected patterns to
-                explain what may have changed.
+
+                Eventually, this response will use your
+                personal measurements, baselines, trends,
+                and detected relationships.
             </div>
             """
         )
@@ -592,10 +743,14 @@ with heart_tab:
             metric_card(
                 "❤️",
                 "Resting heart rate",
-                "61 bpm",
-                "30-day average: 62 bpm",
-                "Typical",
+                f"{latest['resting_hr']:.0f} bpm",
+                (
+                    f"30-day average: "
+                    f"{baseline['resting_hr']:.0f} bpm"
+                ),
+                status_for("resting_hr")["label"],
                 "⌚ Apple Watch",
+                status_style("resting_hr"),
             )
         )
 
@@ -604,10 +759,14 @@ with heart_tab:
             metric_card(
                 "💓",
                 "HRV",
-                "52 ms",
-                "30-day average: 48 ms",
-                "Above baseline",
+                f"{latest['hrv']:.0f} ms",
+                (
+                    f"30-day average: "
+                    f"{baseline['hrv']:.0f} ms"
+                ),
+                status_for("hrv")["label"],
                 "⌚ Apple Watch",
+                status_style("hrv"),
             )
         )
 
@@ -616,10 +775,11 @@ with heart_tab:
             metric_card(
                 "🫀",
                 "Last ECG",
-                "Sinus rhythm",
-                "72 bpm during recording",
-                "No demo alert",
+                "—",
+                "No ECG demo data yet",
+                "Awaiting data",
                 "⌚ Apple Watch",
+                "neutral",
             )
         )
 
@@ -632,10 +792,21 @@ with heart_tab:
             metric_card(
                 "🩸",
                 "Blood pressure",
-                "116 / 72",
-                "Pulse pressure: 44 mmHg",
-                "Near baseline",
+                (
+                    f"{latest['systolic_bp']:.0f} / "
+                    f"{latest['diastolic_bp']:.0f}"
+                ),
+                (
+                    f"Pulse pressure: "
+                    f"{latest['pulse_pressure']:.0f} mmHg"
+                ),
+                bp_status["label"],
                 "🩺 Connected cuff",
+                (
+                    "good"
+                    if bp_status["level"] == "typical"
+                    else bp_status["level"]
+                ),
             )
         )
 
@@ -644,10 +815,15 @@ with heart_tab:
             metric_card(
                 "📊",
                 "Mean arterial pressure",
-                "87 mmHg",
+                f"{latest['map']:.0f} mmHg",
                 "Estimated from cuff measurement",
-                "Stable",
+                bp_status["label"],
                 "🌿 Calculated by Mallow",
+                (
+                    "good"
+                    if bp_status["level"] == "typical"
+                    else bp_status["level"]
+                ),
             )
         )
 
@@ -656,53 +832,11 @@ with heart_tab:
             metric_card(
                 "🏃",
                 "Heart-rate recovery",
-                "27 bpm",
-                "1-minute recovery",
-                "Typical",
-                "⌚ Apple Watch",
-            )
-        )
-
-    st.write("")
-
-    st.subheader("Rhythm & monitoring")
-
-    row3 = st.columns(3)
-
-    with row3[0]:
-        render_html(
-            metric_card(
-                "💗",
-                "Irregular rhythm alerts",
-                "None",
-                "Demo history",
-                "No recent alerts",
-                "⌚ Apple Watch",
-            )
-        )
-
-    with row3[1]:
-        render_html(
-            metric_card(
-                "🫀",
-                "AFib burden",
                 "—",
-                "No demo measurement",
+                "No demo measurement yet",
                 "Awaiting data",
-                "HealthKit",
-                status_type="neutral",
-            )
-        )
-
-    with row3[2]:
-        render_html(
-            metric_card(
-                "🚶",
-                "Walking heart rate",
-                "91 bpm",
-                "30-day average: 93 bpm",
-                "Typical",
                 "⌚ Apple Watch",
+                "neutral",
             )
         )
 
@@ -719,34 +853,54 @@ with metabolic_tab:
             metric_card(
                 "🍬",
                 "Current glucose",
-                "94 mg/dL",
-                "Daily average: 101 mg/dL",
-                "Stable",
-                "🩸 CGM",
+                f"{latest['glucose']:.0f} mg/dL",
+                (
+                    f"30-day average: "
+                    f"{baseline['glucose']:.0f} mg/dL"
+                ),
+                status_for("glucose")["label"],
+                "🩸 CGM / HealthKit",
+                status_style("glucose"),
             )
         )
 
     with row1[1]:
+        glucose_std = health_data.tail(30)[
+            "glucose"
+        ].std()
+
+        glucose_mean = health_data.tail(30)[
+            "glucose"
+        ].mean()
+
+        glucose_cv = (
+            glucose_std
+            / glucose_mean
+            * 100
+        )
+
         render_html(
             metric_card(
                 "📈",
                 "Glucose variability",
-                "12%",
-                "Synthetic demo value",
-                "Stable",
+                f"{glucose_cv:.1f}%",
+                "30-day coefficient of variation",
+                "Calculated from recent data",
                 "🌿 Calculated by Mallow",
+                "neutral",
             )
         )
 
     with row1[2]:
         render_html(
             metric_card(
-                "⏱️",
-                "Time in selected range",
-                "94%",
-                "Synthetic demo value",
-                "Stable",
-                "🩸 CGM",
+                "⚖️",
+                "Weight",
+                "—",
+                "No weight data yet",
+                "Awaiting data",
+                "HealthKit / smart scale",
+                "neutral",
             )
         )
 
@@ -759,45 +913,58 @@ with metabolic_tab:
             metric_card(
                 "🩸",
                 "Blood pressure",
-                "116 / 72",
-                "Latest cuff reading",
-                "Near baseline",
+                (
+                    f"{latest['systolic_bp']:.0f} / "
+                    f"{latest['diastolic_bp']:.0f}"
+                ),
+                (
+                    f"30-day avg: "
+                    f"{baseline['systolic_bp']:.0f} / "
+                    f"{baseline['diastolic_bp']:.0f}"
+                ),
+                bp_status["label"],
                 "🩺 Connected cuff",
+                (
+                    "good"
+                    if bp_status["level"] == "typical"
+                    else bp_status["level"]
+                ),
             )
         )
 
     with row2[1]:
         render_html(
             metric_card(
-                "⚖️",
-                "Weight",
+                "💉",
+                "Insulin delivery",
                 "—",
-                "No demo measurement",
+                "No insulin data yet",
                 "Awaiting data",
-                "HealthKit / smart scale",
-                status_type="neutral",
+                "HealthKit",
+                "neutral",
             )
         )
 
     with row2[2]:
         render_html(
             metric_card(
-                "💉",
-                "Insulin delivery",
-                "—",
-                "No demo measurement",
-                "Awaiting data",
-                "HealthKit",
-                status_type="neutral",
+                "🌿",
+                "Glucose baseline",
+                f"{baseline['glucose']:.0f} mg/dL",
+                "Calculated over the last 30 days",
+                "Personal reference",
+                "Calculated by Mallow",
+                "neutral",
             )
         )
 
     st.write("")
 
     st.info(
-        "Blood glucose and blood-pressure measurements will come "
-        "from compatible devices, HealthKit, or manual entries. "
-        "Mallow does not directly measure them."
+        "Blood glucose and blood-pressure measurements "
+        "will come from compatible devices, HealthKit, "
+        "or manual entries. Mallow does not directly "
+        "measure them."
     )
 
 
@@ -806,6 +973,31 @@ with sleep_tab:
 
     st.subheader("Sleep & respiratory 🌙")
 
+    deep_percent = (
+        latest["deep_sleep_hours"]
+        / latest["sleep_hours"]
+        * 100
+    )
+
+    rem_percent = (
+        latest["rem_sleep_hours"]
+        / latest["sleep_hours"]
+        * 100
+    )
+
+    core_sleep = max(
+        latest["sleep_hours"]
+        - latest["deep_sleep_hours"]
+        - latest["rem_sleep_hours"],
+        0,
+    )
+
+    core_percent = (
+        core_sleep
+        / latest["sleep_hours"]
+        * 100
+    )
+
     row1 = st.columns(4)
 
     with row1[0]:
@@ -813,10 +1005,14 @@ with sleep_tab:
             metric_card(
                 "😴",
                 "Total sleep",
-                "7 h 34 m",
-                "30-day average: 7 h 06 m",
-                "Above average",
+                f"{latest['sleep_hours']:.1f} h",
+                (
+                    f"30-day average: "
+                    f"{baseline['sleep_hours']:.1f} h"
+                ),
+                status_for("sleep_hours")["label"],
                 "⌚ Apple Watch",
+                status_style("sleep_hours"),
             )
         )
 
@@ -825,10 +1021,13 @@ with sleep_tab:
             metric_card(
                 "🌙",
                 "Deep sleep",
-                "1 h 16 m",
-                "17% of total sleep",
-                "Typical",
+                (
+                    f"{latest['deep_sleep_hours']:.1f} h"
+                ),
+                f"{deep_percent:.0f}% of total sleep",
+                "Latest synthetic night",
                 "⌚ Apple Watch",
+                "neutral",
             )
         )
 
@@ -837,10 +1036,11 @@ with sleep_tab:
             metric_card(
                 "💭",
                 "REM sleep",
-                "1 h 41 m",
-                "22% of total sleep",
-                "Typical",
+                f"{latest['rem_sleep_hours']:.1f} h",
+                f"{rem_percent:.0f}% of total sleep",
+                "Latest synthetic night",
                 "⌚ Apple Watch",
+                "neutral",
             )
         )
 
@@ -849,10 +1049,11 @@ with sleep_tab:
             metric_card(
                 "🛏️",
                 "Core sleep",
-                "4 h 11 m",
-                "55% of total sleep",
-                "Typical",
-                "⌚ Apple Watch",
+                f"{core_sleep:.1f} h",
+                f"{core_percent:.0f}% of total sleep",
+                "Calculated remainder",
+                "🌿 Calculated by Mallow",
+                "neutral",
             )
         )
 
@@ -865,10 +1066,16 @@ with sleep_tab:
             metric_card(
                 "🌬️",
                 "Respiratory rate",
-                "14.2 / min",
-                "Overnight average",
-                "Typical",
+                (
+                    f"{latest['respiratory_rate']:.1f} / min"
+                ),
+                (
+                    f"30-day average: "
+                    f"{baseline['respiratory_rate']:.1f}"
+                ),
+                status_for("respiratory_rate")["label"],
                 "⌚ Apple Watch",
+                status_style("respiratory_rate"),
             )
         )
 
@@ -877,10 +1084,18 @@ with sleep_tab:
             metric_card(
                 "🫁",
                 "Oxygen saturation",
-                "98%",
-                "Overnight average: 97%",
-                "Typical",
+                (
+                    f"{latest['oxygen_saturation']:.1f}%"
+                ),
+                (
+                    f"30-day average: "
+                    f"{baseline['oxygen_saturation']:.1f}%"
+                ),
+                status_for(
+                    "oxygen_saturation"
+                )["label"],
                 "⌚ Apple Watch",
+                status_style("oxygen_saturation"),
             )
         )
 
@@ -889,10 +1104,15 @@ with sleep_tab:
             metric_card(
                 "🌡️",
                 "Wrist temperature",
-                "+0.1 °F",
-                "Compared with baseline",
-                "Typical",
+                (
+                    f"{latest['wrist_temperature']:+.2f} °F"
+                ),
+                "Deviation from personal baseline",
+                status_for(
+                    "wrist_temperature"
+                )["label"],
                 "⌚ Apple Watch",
+                status_style("wrist_temperature"),
             )
         )
 
@@ -901,10 +1121,11 @@ with sleep_tab:
             metric_card(
                 "🌘",
                 "Night awakenings",
-                "2",
-                "Synthetic demo value",
-                "Typical",
+                "—",
+                "No demo measurement yet",
+                "Awaiting data",
                 "⌚ Apple Watch",
+                "neutral",
             )
         )
 
@@ -916,5 +1137,7 @@ st.divider()
 st.caption(
     "Mallow is a personal health-monitoring project and is not intended "
     "for diagnosis, treatment, or clinical use. "
+    "Baseline labels describe statistical differences from personal "
+    "history, not whether a measurement is medically normal. "
     "All measurements shown in this prototype are synthetic."
 )
