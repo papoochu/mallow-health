@@ -8,8 +8,10 @@ def generate_health_data(days=90, seed=42):
     """
     Generate synthetic daily health measurements for the Mallow prototype.
 
-    These values are completely fictional and are only used to develop
-    and test the dashboard.
+    Some measurements intentionally contain mild relationships so that
+    Mallow's analytics, correlation tools, and ML features can be tested.
+
+    These values are completely fictional and are not clinical data.
     """
 
     rng = np.random.default_rng(seed)
@@ -19,36 +21,78 @@ def generate_health_data(days=90, seed=42):
         for i in range(days - 1, -1, -1)
     ]
 
+    # Sleep
+    sleep_hours = rng.normal(
+        loc=7.1,
+        scale=0.7,
+        size=days,
+    )
+
+    sleep_hours = np.clip(
+        sleep_hours,
+        4.0,
+        10.0,
+    )
+
+    # Difference from the synthetic person's typical sleep duration
+    sleep_deviation = (
+        sleep_hours - 7.1
+    )
+
     # Cardiovascular
-    resting_hr = rng.normal(
-        loc=62,
-        scale=3,
-        size=days,
+    # Less sleep tends to occur alongside a higher resting heart rate.
+    resting_hr = (
+        62
+        - 2.5 * sleep_deviation
+        + rng.normal(
+            loc=0,
+            scale=1.8,
+            size=days,
+        )
     )
 
-    hrv = rng.normal(
-        loc=48,
-        scale=7,
-        size=days,
+    # More sleep tends to occur alongside higher HRV.
+    hrv = (
+        48
+        + 5.0 * sleep_deviation
+        + rng.normal(
+            loc=0,
+            scale=3.5,
+            size=days,
+        )
     )
 
-    systolic_bp = rng.normal(
-        loc=118,
-        scale=6,
-        size=days,
+    # Blood pressure has a smaller relationship with sleep.
+    systolic_bp = (
+        118
+        - 1.5 * sleep_deviation
+        + rng.normal(
+            loc=0,
+            scale=5.5,
+            size=days,
+        )
     )
 
-    diastolic_bp = rng.normal(
-        loc=74,
-        scale=4,
-        size=days,
+    diastolic_bp = (
+        74
+        - 0.8 * sleep_deviation
+        + rng.normal(
+            loc=0,
+            scale=3.5,
+            size=days,
+        )
     )
 
     # Metabolic
-    glucose = rng.normal(
-        loc=98,
-        scale=8,
-        size=days,
+    # Shorter sleep is given a modest association with higher glucose.
+    glucose = (
+        98
+        - 2.5 * sleep_deviation
+        + rng.normal(
+            loc=0,
+            scale=6.0,
+            size=days,
+        )
     )
 
     # Respiratory
@@ -60,39 +104,53 @@ def generate_health_data(days=90, seed=42):
 
     respiratory_rate = rng.normal(
         loc=14.5,
-        scale=1,
+        scale=1.0,
         size=days,
     )
 
-    # Temperature is stored as deviation from personal baseline
+    # Temperature
+    # Stored as deviation from personal wrist-temperature baseline.
     wrist_temperature = rng.normal(
         loc=0,
         scale=0.25,
         size=days,
     )
 
-    # Sleep
-    sleep_hours = rng.normal(
-        loc=7.1,
-        scale=0.7,
-        size=days,
-    )
-
-    deep_sleep_hours = sleep_hours * rng.normal(
+    # Sleep stages
+    deep_sleep_fraction = rng.normal(
         loc=0.17,
         scale=0.02,
         size=days,
     )
 
-    rem_sleep_hours = sleep_hours * rng.normal(
+    rem_sleep_fraction = rng.normal(
         loc=0.22,
         scale=0.025,
         size=days,
     )
 
-    # Prevent impossible demo values
-    resting_hr = np.clip(resting_hr, 45, 100)
-    hrv = np.clip(hrv, 15, 100)
+    deep_sleep_hours = (
+        sleep_hours
+        * deep_sleep_fraction
+    )
+
+    rem_sleep_hours = (
+        sleep_hours
+        * rem_sleep_fraction
+    )
+
+    # Keep synthetic values within plausible demo ranges
+    resting_hr = np.clip(
+        resting_hr,
+        45,
+        100,
+    )
+
+    hrv = np.clip(
+        hrv,
+        15,
+        100,
+    )
 
     systolic_bp = np.clip(
         systolic_bp,
@@ -124,12 +182,25 @@ def generate_health_data(days=90, seed=42):
         25,
     )
 
-    sleep_hours = np.clip(
-        sleep_hours,
-        4,
-        10,
+    wrist_temperature = np.clip(
+        wrist_temperature,
+        -2.0,
+        2.0,
     )
 
+    deep_sleep_hours = np.clip(
+        deep_sleep_hours,
+        0,
+        sleep_hours,
+    )
+
+    rem_sleep_hours = np.clip(
+        rem_sleep_hours,
+        0,
+        sleep_hours,
+    )
+
+    # Build health dataset
     data = pd.DataFrame(
         {
             "date": dates,

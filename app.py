@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 
 from textwrap import dedent
@@ -9,9 +10,10 @@ from src.analytics import (
     get_health_summary,
     get_baseline_status,
 )
-
 from src.anomaly import detect_current_anomaly
 from src.insights import build_anomaly_insight
+from src.assistant import ask_mallow
+from src.relationships import calculate_correlation
 
 
 st.set_page_config(
@@ -32,7 +34,12 @@ health_summary = get_health_summary(
     baseline_days=30,
 )
 
-# Run Mallow's statistical anomaly detector
+latest = health_summary["latest"]
+baseline = health_summary["baseline"]
+z_scores = health_summary["z_scores"]
+
+
+# Run anomaly analysis
 anomaly_result = detect_current_anomaly(
     health_data
 )
@@ -41,12 +48,8 @@ mallow_insight = build_anomaly_insight(
     anomaly_result
 )
 
-latest = health_summary["latest"]
-baseline = health_summary["baseline"]
-z_scores = health_summary["z_scores"]
 
-
-# Helpers for personal baseline status
+# Personal baseline helpers
 def status_for(metric):
     return get_baseline_status(
         health_data,
@@ -68,8 +71,13 @@ def status_style(metric):
 
 
 def combined_bp_status():
-    systolic = status_for("systolic_bp")
-    diastolic = status_for("diastolic_bp")
+    systolic = status_for(
+        "systolic_bp"
+    )
+
+    diastolic = status_for(
+        "diastolic_bp"
+    )
 
     max_z = max(
         abs(systolic["z_score"]),
@@ -96,11 +104,20 @@ def combined_bp_status():
 
 bp_status = combined_bp_status()
 
+bp_style = (
+    "good"
+    if bp_status["level"] == "typical"
+    else bp_status["level"]
+)
+
 
 # Sidebar
 with st.sidebar:
     st.markdown("## Mallow 🌿")
-    st.caption("your gentle personal health companion")
+
+    st.caption(
+        "your gentle personal health companion"
+    )
 
     dark_mode = st.toggle(
         "🌙 Dark mode",
@@ -140,6 +157,9 @@ if dark_mode:
         "chart_line": "#A5C4AA",
         "chart_average": "#C6A8B8",
         "input": "#202720",
+        "input_text": "#FFFFFF",
+        "input_placeholder": "#A9B6AC",
+        "input_focus": "#7EA189",
     }
 
 else:
@@ -166,11 +186,16 @@ else:
         "chart_grid": "#EEE9E3",
         "chart_line": "#7F9D87",
         "chart_average": "#C9B3BE",
-        "input": "#FFFFFF",
+
+        # Keep Ask Mallow dark even in light mode
+        "input": "#566B5D",
+        "input_text": "#FFFFFF",
+        "input_placeholder": "#D5DFD8",
+        "input_focus": "#789583",
     }
 
 
-# Styling
+# Global styling
 st.markdown(
     f"""
     <style>
@@ -296,19 +321,31 @@ st.markdown(
         border-radius: 20px;
         padding: 1.35rem 1.5rem;
         margin-bottom: 1rem;
+        line-height: 1.65;
+    }}
+
+    /* Ask Mallow input */
+
+    [data-testid="stTextInput"] {{
+        margin-top: 0.25rem;
     }}
 
     [data-testid="stTextInput"] div[data-baseweb="input"] {{
         background-color: {colors["input"]} !important;
-        border: 1px solid {colors["border"]} !important;
+        border: 1px solid {colors["input"]} !important;
         border-radius: 16px !important;
         box-shadow: none !important;
         overflow: hidden !important;
     }}
 
+    [data-testid="stTextInput"] div[data-baseweb="input"]:hover {{
+        border-color: {colors["input_focus"]} !important;
+    }}
+
     [data-testid="stTextInput"] div[data-baseweb="input"]:focus-within {{
-        border-color: {colors["heading"]} !important;
+        border: 1px solid {colors["input_focus"]} !important;
         box-shadow: none !important;
+        outline: none !important;
     }}
 
     [data-testid="stTextInput"] div[data-baseweb="base-input"] {{
@@ -319,16 +356,21 @@ st.markdown(
 
     [data-testid="stTextInput"] input {{
         background-color: transparent !important;
-        color: {colors["text"]} !important;
+        color: {colors["input_text"]} !important;
+        -webkit-text-fill-color: {colors["input_text"]} !important;
+        caret-color: {colors["input_text"]} !important;
         border: none !important;
         border-radius: 0 !important;
         outline: none !important;
         box-shadow: none !important;
         padding: 0.8rem 0.9rem !important;
+        opacity: 1 !important;
+        font-size: 1rem !important;
     }}
 
     [data-testid="stTextInput"] input::placeholder {{
-        color: {colors["muted"]} !important;
+        color: {colors["input_placeholder"]} !important;
+        -webkit-text-fill-color: {colors["input_placeholder"]} !important;
         opacity: 1 !important;
     }}
 
@@ -350,6 +392,7 @@ st.markdown(
 )
 
 
+# HTML helper
 def render_html(content):
     clean_html = " ".join(
         line.strip()
@@ -362,6 +405,7 @@ def render_html(content):
     )
 
 
+# Metric card helper
 def metric_card(
     icon,
     title,
@@ -417,13 +461,20 @@ render_html(
 )
 
 
-# Navigation
-overview_tab, heart_tab, metabolic_tab, sleep_tab = st.tabs(
+# Tabs
+(
+    overview_tab,
+    heart_tab,
+    metabolic_tab,
+    sleep_tab,
+    relationships_tab,
+) = st.tabs(
     [
         "🌿 Overview",
         "❤️ Heart & circulation",
         "🩸 Blood & metabolic",
         "🌙 Sleep & respiratory",
+        "📊 Relationships",
     ]
 )
 
@@ -436,7 +487,9 @@ with overview_tab:
     row1 = st.columns(4)
 
     with row1[0]:
-        heart_status = status_for("resting_hr")
+        heart_status = status_for(
+            "resting_hr"
+        )
 
         render_html(
             metric_card(
@@ -449,7 +502,9 @@ with overview_tab:
                 ),
                 heart_status["label"],
                 "⌚ Apple Watch",
-                status_style("resting_hr"),
+                status_style(
+                    "resting_hr"
+                ),
             )
         )
 
@@ -465,16 +520,14 @@ with overview_tab:
                 f"MAP: {latest['map']:.0f} mmHg",
                 bp_status["label"],
                 "🩺 Connected cuff",
-                (
-                    "good"
-                    if bp_status["level"] == "typical"
-                    else bp_status["level"]
-                ),
+                bp_style,
             )
         )
 
     with row1[2]:
-        glucose_status = status_for("glucose")
+        glucose_status = status_for(
+            "glucose"
+        )
 
         render_html(
             metric_card(
@@ -487,7 +540,9 @@ with overview_tab:
                 ),
                 glucose_status["label"],
                 "🩸 CGM / HealthKit",
-                status_style("glucose"),
+                status_style(
+                    "glucose"
+                ),
             )
         )
 
@@ -500,16 +555,16 @@ with overview_tab:
             metric_card(
                 "🫁",
                 "Oxygen saturation",
-                (
-                    f"{latest['oxygen_saturation']:.1f}%"
-                ),
+                f"{latest['oxygen_saturation']:.1f}%",
                 (
                     f"30-day average: "
                     f"{baseline['oxygen_saturation']:.1f}%"
                 ),
                 oxygen_status["label"],
                 "⌚ Apple Watch",
-                status_style("oxygen_saturation"),
+                status_style(
+                    "oxygen_saturation"
+                ),
             )
         )
 
@@ -518,7 +573,9 @@ with overview_tab:
     row2 = st.columns(4)
 
     with row2[0]:
-        hrv_status = status_for("hrv")
+        hrv_status = status_for(
+            "hrv"
+        )
 
         render_html(
             metric_card(
@@ -531,7 +588,9 @@ with overview_tab:
                 ),
                 hrv_status["label"],
                 "⌚ Apple Watch",
-                status_style("hrv"),
+                status_style(
+                    "hrv"
+                ),
             )
         )
 
@@ -547,10 +606,12 @@ with overview_tab:
                 (
                     f"{latest['wrist_temperature']:+.2f} °F"
                 ),
-                "Deviation from temperature baseline",
+                "Deviation from personal baseline",
                 temp_status["label"],
                 "⌚ Apple Watch",
-                status_style("wrist_temperature"),
+                status_style(
+                    "wrist_temperature"
+                ),
             )
         )
 
@@ -572,7 +633,9 @@ with overview_tab:
                 ),
                 respiratory_status["label"],
                 "⌚ Apple Watch",
-                status_style("respiratory_rate"),
+                status_style(
+                    "respiratory_rate"
+                ),
             )
         )
 
@@ -592,15 +655,23 @@ with overview_tab:
                 ),
                 sleep_status["label"],
                 "⌚ Apple Watch",
-                status_style("sleep_hours"),
+                status_style(
+                    "sleep_hours"
+                ),
             )
         )
 
     st.write("")
 
-    st.subheader("30-day heart trend")
+    st.subheader(
+        "30-day heart trend"
+    )
 
-    heart_df = health_data.tail(30).copy()
+    heart_df = (
+        health_data
+        .tail(30)
+        .copy()
+    )
 
     heart_df["date"] = pd.to_datetime(
         heart_df["date"]
@@ -632,9 +703,15 @@ with overview_tab:
     fig.add_hline(
         y=baseline["resting_hr"],
         line_dash="dot",
-        line_color=colors["chart_average"],
-        annotation_text="30-day average",
-        annotation_font_color=colors["muted"],
+        line_color=colors[
+            "chart_average"
+        ],
+        annotation_text=(
+            "30-day average"
+        ),
+        annotation_font_color=colors[
+            "muted"
+        ],
     )
 
     fig.update_layout(
@@ -645,8 +722,12 @@ with overview_tab:
             t=25,
             b=25,
         ),
-        paper_bgcolor=colors["chart_bg"],
-        plot_bgcolor=colors["chart_bg"],
+        paper_bgcolor=colors[
+            "chart_bg"
+        ],
+        plot_bgcolor=colors[
+            "chart_bg"
+        ],
         font=dict(
             color=colors["text"],
         ),
@@ -657,7 +738,9 @@ with overview_tab:
         ),
         yaxis=dict(
             title="bpm",
-            gridcolor=colors["chart_grid"],
+            gridcolor=colors[
+                "chart_grid"
+            ],
             zeroline=False,
         ),
         showlegend=False,
@@ -675,23 +758,14 @@ with overview_tab:
         },
     )
 
-    st.subheader("Mallow noticed 🌱")
-
-    if anomaly_result["is_anomaly"]:
-        insight_heading = (
-            "Today's overall pattern looks unusual "
-            "compared with your recent history."
-        )
-    else:
-        insight_heading = (
-            "Today's overall pattern looks fairly similar "
-            "to your recent history."
-        )
+    st.subheader(
+        "Mallow noticed 🌱"
+    )
 
     render_html(
         f"""
         <div class="insight-card">
-            <b>{insight_heading}</b>
+            🌿 <b>Statistical summary</b>
             <br><br>
             {mallow_insight}
             <br><br>
@@ -703,29 +777,36 @@ with overview_tab:
         """
     )
 
-    st.subheader("Ask Mallow 💬")
+    st.subheader(
+        "Ask Mallow 💬"
+    )
 
     question = st.text_input(
         "Ask something about your health data",
         placeholder=(
-            "Why has my resting heart rate changed this week?"
+            "Does my sleep seem related to my heart rate?"
         ),
         label_visibility="collapsed",
     )
 
     if question:
+        answer = ask_mallow(
+            question,
+            health_data,
+        )
+
         render_html(
-            """
+            f"""
             <div class="insight-card">
-                🌿 <b>
-                    Mallow isn't connected to its AI brain yet.
-                </b>
-
+                🌿 <b>Mallow</b>
                 <br><br>
-
-                Eventually, this response will use your
-                personal measurements, baselines, trends,
-                and detected relationships.
+                {answer}
+                <br><br>
+                <span style="color:{colors["muted"]};">
+                    Mallow is summarizing your health data
+                    and personal statistical trends.
+                    This is not a diagnosis.
+                </span>
             </div>
             """
         )
@@ -734,7 +815,9 @@ with overview_tab:
 # Heart & circulation
 with heart_tab:
 
-    st.subheader("Heart & circulation ❤️")
+    st.subheader(
+        "Heart & circulation ❤️"
+    )
 
     row1 = st.columns(3)
 
@@ -748,9 +831,13 @@ with heart_tab:
                     f"30-day average: "
                     f"{baseline['resting_hr']:.0f} bpm"
                 ),
-                status_for("resting_hr")["label"],
+                status_for(
+                    "resting_hr"
+                )["label"],
                 "⌚ Apple Watch",
-                status_style("resting_hr"),
+                status_style(
+                    "resting_hr"
+                ),
             )
         )
 
@@ -764,9 +851,13 @@ with heart_tab:
                     f"30-day average: "
                     f"{baseline['hrv']:.0f} ms"
                 ),
-                status_for("hrv")["label"],
+                status_for(
+                    "hrv"
+                )["label"],
                 "⌚ Apple Watch",
-                status_style("hrv"),
+                status_style(
+                    "hrv"
+                ),
             )
         )
 
@@ -802,11 +893,7 @@ with heart_tab:
                 ),
                 bp_status["label"],
                 "🩺 Connected cuff",
-                (
-                    "good"
-                    if bp_status["level"] == "typical"
-                    else bp_status["level"]
-                ),
+                bp_style,
             )
         )
 
@@ -819,11 +906,7 @@ with heart_tab:
                 "Estimated from cuff measurement",
                 bp_status["label"],
                 "🌿 Calculated by Mallow",
-                (
-                    "good"
-                    if bp_status["level"] == "typical"
-                    else bp_status["level"]
-                ),
+                bp_style,
             )
         )
 
@@ -840,11 +923,60 @@ with heart_tab:
             )
         )
 
+    st.write("")
+
+    st.subheader(
+        "Rhythm & monitoring"
+    )
+
+    row3 = st.columns(3)
+
+    with row3[0]:
+        render_html(
+            metric_card(
+                "💗",
+                "Irregular rhythm alerts",
+                "—",
+                "No demo rhythm history yet",
+                "Awaiting data",
+                "⌚ Apple Watch",
+                "neutral",
+            )
+        )
+
+    with row3[1]:
+        render_html(
+            metric_card(
+                "🫀",
+                "AFib burden",
+                "—",
+                "No demo measurement",
+                "Awaiting data",
+                "HealthKit",
+                "neutral",
+            )
+        )
+
+    with row3[2]:
+        render_html(
+            metric_card(
+                "🚶",
+                "Walking heart rate",
+                "—",
+                "No demo measurement yet",
+                "Awaiting data",
+                "⌚ Apple Watch",
+                "neutral",
+            )
+        )
+
 
 # Blood & metabolic
 with metabolic_tab:
 
-    st.subheader("Blood & metabolic 🩸")
+    st.subheader(
+        "Blood & metabolic 🩸"
+    )
 
     row1 = st.columns(3)
 
@@ -858,20 +990,28 @@ with metabolic_tab:
                     f"30-day average: "
                     f"{baseline['glucose']:.0f} mg/dL"
                 ),
-                status_for("glucose")["label"],
+                status_for(
+                    "glucose"
+                )["label"],
                 "🩸 CGM / HealthKit",
-                status_style("glucose"),
+                status_style(
+                    "glucose"
+                ),
             )
         )
 
     with row1[1]:
-        glucose_std = health_data.tail(30)[
-            "glucose"
-        ].std()
+        glucose_std = (
+            health_data
+            .tail(30)["glucose"]
+            .std()
+        )
 
-        glucose_mean = health_data.tail(30)[
-            "glucose"
-        ].mean()
+        glucose_mean = (
+            health_data
+            .tail(30)["glucose"]
+            .mean()
+        )
 
         glucose_cv = (
             glucose_std
@@ -924,11 +1064,7 @@ with metabolic_tab:
                 ),
                 bp_status["label"],
                 "🩺 Connected cuff",
-                (
-                    "good"
-                    if bp_status["level"] == "typical"
-                    else bp_status["level"]
-                ),
+                bp_style,
             )
         )
 
@@ -971,7 +1107,9 @@ with metabolic_tab:
 # Sleep & respiratory
 with sleep_tab:
 
-    st.subheader("Sleep & respiratory 🌙")
+    st.subheader(
+        "Sleep & respiratory 🌙"
+    )
 
     deep_percent = (
         latest["deep_sleep_hours"]
@@ -1010,9 +1148,13 @@ with sleep_tab:
                     f"30-day average: "
                     f"{baseline['sleep_hours']:.1f} h"
                 ),
-                status_for("sleep_hours")["label"],
+                status_for(
+                    "sleep_hours"
+                )["label"],
                 "⌚ Apple Watch",
-                status_style("sleep_hours"),
+                status_style(
+                    "sleep_hours"
+                ),
             )
         )
 
@@ -1021,9 +1163,7 @@ with sleep_tab:
             metric_card(
                 "🌙",
                 "Deep sleep",
-                (
-                    f"{latest['deep_sleep_hours']:.1f} h"
-                ),
+                f"{latest['deep_sleep_hours']:.1f} h",
                 f"{deep_percent:.0f}% of total sleep",
                 "Latest synthetic night",
                 "⌚ Apple Watch",
@@ -1073,9 +1213,13 @@ with sleep_tab:
                     f"30-day average: "
                     f"{baseline['respiratory_rate']:.1f}"
                 ),
-                status_for("respiratory_rate")["label"],
+                status_for(
+                    "respiratory_rate"
+                )["label"],
                 "⌚ Apple Watch",
-                status_style("respiratory_rate"),
+                status_style(
+                    "respiratory_rate"
+                ),
             )
         )
 
@@ -1095,7 +1239,9 @@ with sleep_tab:
                     "oxygen_saturation"
                 )["label"],
                 "⌚ Apple Watch",
-                status_style("oxygen_saturation"),
+                status_style(
+                    "oxygen_saturation"
+                ),
             )
         )
 
@@ -1112,7 +1258,9 @@ with sleep_tab:
                     "wrist_temperature"
                 )["label"],
                 "⌚ Apple Watch",
-                status_style("wrist_temperature"),
+                status_style(
+                    "wrist_temperature"
+                ),
             )
         )
 
@@ -1128,6 +1276,246 @@ with sleep_tab:
                 "neutral",
             )
         )
+
+
+# Relationships
+with relationships_tab:
+
+    st.subheader(
+        "Relationships 📊"
+    )
+
+    st.caption(
+        "Explore statistical relationships between your recent "
+        "measurements. Correlation does not mean that one measurement "
+        "caused another."
+    )
+
+    available_metrics = {
+        "Sleep duration": "sleep_hours",
+        "Resting heart rate": "resting_hr",
+        "HRV": "hrv",
+        "Systolic blood pressure": "systolic_bp",
+        "Diastolic blood pressure": "diastolic_bp",
+        "Blood glucose": "glucose",
+        "Oxygen saturation": "oxygen_saturation",
+        "Respiratory rate": "respiratory_rate",
+        "Wrist temperature": "wrist_temperature",
+    }
+
+    selector_columns = st.columns(2)
+
+    with selector_columns[0]:
+        metric_a_name = st.selectbox(
+            "First measurement",
+            list(
+                available_metrics.keys()
+            ),
+            index=0,
+        )
+
+    with selector_columns[1]:
+        metric_b_name = st.selectbox(
+            "Second measurement",
+            list(
+                available_metrics.keys()
+            ),
+            index=1,
+        )
+
+    metric_a = available_metrics[
+        metric_a_name
+    ]
+
+    metric_b = available_metrics[
+        metric_b_name
+    ]
+
+    if metric_a == metric_b:
+
+        st.info(
+            "Choose two different measurements to compare."
+        )
+
+    else:
+
+        relationship_data = (
+            health_data
+            .tail(30)
+            .copy()
+        )
+
+        correlation = calculate_correlation(
+            relationship_data,
+            metric_a,
+            metric_b,
+            days=30,
+        )
+
+        x = relationship_data[
+            metric_a
+        ].to_numpy()
+
+        y = relationship_data[
+            metric_b
+        ].to_numpy()
+
+        slope, intercept = np.polyfit(
+            x,
+            y,
+            1,
+        )
+
+        x_line = np.linspace(
+            x.min(),
+            x.max(),
+            100,
+        )
+
+        y_line = (
+            slope * x_line
+            + intercept
+        )
+
+        fig_relationship = go.Figure()
+
+        fig_relationship.add_trace(
+            go.Scatter(
+                x=x,
+                y=y,
+                mode="markers",
+                name="Daily measurements",
+                marker=dict(
+                    size=9,
+                    color=colors[
+                        "chart_line"
+                    ],
+                    opacity=0.75,
+                ),
+                hovertemplate=(
+                    f"{metric_a_name}: "
+                    "%{x:.2f}"
+                    "<br>"
+                    f"{metric_b_name}: "
+                    "%{y:.2f}"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+        fig_relationship.add_trace(
+            go.Scatter(
+                x=x_line,
+                y=y_line,
+                mode="lines",
+                name="Trend",
+                line=dict(
+                    color=colors[
+                        "chart_average"
+                    ],
+                    width=3,
+                    dash="dot",
+                ),
+            )
+        )
+
+        fig_relationship.update_layout(
+            height=450,
+            paper_bgcolor=colors[
+                "chart_bg"
+            ],
+            plot_bgcolor=colors[
+                "chart_bg"
+            ],
+            font=dict(
+                color=colors["text"],
+            ),
+            xaxis=dict(
+                title=metric_a_name,
+                gridcolor=colors[
+                    "chart_grid"
+                ],
+                zeroline=False,
+            ),
+            yaxis=dict(
+                title=metric_b_name,
+                gridcolor=colors[
+                    "chart_grid"
+                ],
+                zeroline=False,
+            ),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1,
+            ),
+            hoverlabel=dict(
+                bgcolor=colors["card"],
+                font_color=colors["text"],
+            ),
+            margin=dict(
+                l=30,
+                r=30,
+                t=55,
+                b=30,
+            ),
+        )
+
+        st.plotly_chart(
+            fig_relationship,
+            use_container_width=True,
+            config={
+                "displayModeBar": False,
+            },
+        )
+
+        if correlation is not None:
+
+            if abs(correlation) < 0.2:
+                strength = "very little"
+
+            elif abs(correlation) < 0.4:
+                strength = "a weak"
+
+            elif abs(correlation) < 0.6:
+                strength = "a moderate"
+
+            elif abs(correlation) < 0.8:
+                strength = "a fairly strong"
+
+            else:
+                strength = "a strong"
+
+            if correlation > 0:
+                direction = "positive"
+
+            elif correlation < 0:
+                direction = "negative"
+
+            else:
+                direction = "neutral"
+
+            render_html(
+                f"""
+                <div class="insight-card">
+                    🌿 <b>Mallow's observation</b>
+                    <br><br>
+                    Over the last 30 days, I found
+                    {strength} {direction} relationship
+                    between {metric_a_name.lower()} and
+                    {metric_b_name.lower()}
+                    (r = {correlation:.2f}).
+                    <br><br>
+                    <span style="color:{colors["muted"]};">
+                        This describes an association in the data.
+                        It does not show that one measurement caused
+                        the other.
+                    </span>
+                </div>
+                """
+            )
 
 
 # Footer
