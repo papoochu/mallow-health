@@ -8,7 +8,6 @@ from src.relationships import (
 )
 
 
-# Words and phrases Mallow understands for each metric
 METRIC_ALIASES = {
     "resting heart rate": "resting_hr",
     "heart rate": "resting_hr",
@@ -106,7 +105,6 @@ def extract_metrics(question):
 
     matches = []
 
-    # Check longer phrases first.
     aliases = sorted(
         METRIC_ALIASES.items(),
         key=lambda item: len(item[0]),
@@ -124,7 +122,6 @@ def extract_metrics(question):
                 )
             )
 
-    # Keep metrics in sentence order.
     matches.sort(
         key=lambda item: item[0]
     )
@@ -203,34 +200,35 @@ def describe_top_relationships(
     )
 
 
-def ask_mallow(question, data):
+def ask_mallow(
+    question,
+    data,
+    analysis_days=30,
+):
     """
-    Answer questions about the user's health data.
+    Answer questions about health data using deterministic analysis.
 
-    This version uses deterministic analysis rather than
-    a generative language model.
+    analysis_days controls the personal baseline and relationship
+    window used by Mallow.
     """
 
     question = question.lower().strip()
 
     summary = get_health_summary(
         data,
-        baseline_days=30,
+        baseline_days=analysis_days,
     )
 
     latest = summary["latest"]
     baseline = summary["baseline"]
 
-    # Detect which metrics were mentioned.
     mentioned_metrics = extract_metrics(
         question
     )
 
-    # Generic relationship questions
+    # Relationship questions
     if is_relationship_question(question):
 
-        # Example:
-        # "Is my sleep related to my heart rate?"
         if len(mentioned_metrics) >= 2:
             metric_a = mentioned_metrics[0]
             metric_b = mentioned_metrics[1]
@@ -239,19 +237,17 @@ def ask_mallow(question, data):
                 data,
                 metric_a,
                 metric_b,
-                days=30,
+                days=analysis_days,
             )
 
-        # Example:
-        # "What is related to my blood pressure?"
         if len(mentioned_metrics) == 1:
             return describe_top_relationships(
                 data,
                 mentioned_metrics[0],
-                days=30,
+                days=analysis_days,
             )
 
-    # Unusual / anomaly questions
+    # Anomaly questions
     if any(
         phrase in question
         for phrase in [
@@ -271,7 +267,7 @@ def ask_mallow(question, data):
             anomaly_result
         )
 
-    # Heart rate
+    # Resting heart rate
     if (
         "heart rate" in question
         or "resting heart" in question
@@ -297,7 +293,7 @@ def ask_mallow(question, data):
             f"7 days was {trend['current_average']:.1f} bpm. "
             f"That is {abs(trend['difference']):.1f} bpm "
             f"{direction} than the previous 7 days. "
-            f"Your 30-day personal baseline is "
+            f"Your {analysis_days}-day personal baseline is "
             f"{baseline['resting_hr']:.1f} bpm."
         )
 
@@ -324,7 +320,7 @@ def ask_mallow(question, data):
             f"{trend['current_average']:.1f} ms. "
             f"That is {abs(trend['difference']):.1f} ms "
             f"{direction} than the previous 7 days. "
-            f"Your 30-day personal baseline is "
+            f"Your {analysis_days}-day personal baseline is "
             f"{baseline['hrv']:.1f} ms."
         )
 
@@ -351,7 +347,7 @@ def ask_mallow(question, data):
             f"of sleep per night over the last 7 days. "
             f"That is {abs(trend['difference']):.1f} hours "
             f"{direction} than the previous week. "
-            f"Your 30-day average is "
+            f"Your {analysis_days}-day average is "
             f"{baseline['sleep_hours']:.1f} hours."
         )
 
@@ -381,8 +377,8 @@ def ask_mallow(question, data):
             f"{trend['current_average']:.1f} mg/dL. "
             f"That is {abs(trend['difference']):.1f} mg/dL "
             f"{direction} than the previous 7 days. "
-            f"Your latest synthetic reading is "
-            f"{latest['glucose']:.1f} mg/dL."
+            f"Your {analysis_days}-day personal baseline is "
+            f"{baseline['glucose']:.1f} mg/dL."
         )
 
     # Blood pressure
@@ -416,7 +412,8 @@ def ask_mallow(question, data):
             f"was approximately "
             f"{systolic['current_average']:.0f}/"
             f"{diastolic['current_average']:.0f} mmHg. "
-            f"Your 30-day personal baseline is approximately "
+            f"Your {analysis_days}-day personal baseline is "
+            f"approximately "
             f"{baseline['systolic_bp']:.0f}/"
             f"{baseline['diastolic_bp']:.0f} mmHg."
         )
@@ -447,8 +444,8 @@ def ask_mallow(question, data):
             f"Your latest respiratory rate is "
             f"{latest_value:.1f} breaths per minute. "
             f"That is {abs(difference):.1f} "
-            f"{direction} than your 30-day personal baseline "
-            f"of {baseline_value:.1f}."
+            f"{direction} than your {analysis_days}-day "
+            f"personal baseline of {baseline_value:.1f}."
         )
 
     # Oxygen saturation
@@ -459,7 +456,7 @@ def ask_mallow(question, data):
         return (
             f"Your latest oxygen saturation is "
             f"{latest['oxygen_saturation']:.1f}%. "
-            f"Your 30-day personal average is "
+            f"Your {analysis_days}-day personal average is "
             f"{baseline['oxygen_saturation']:.1f}%."
         )
 
@@ -468,10 +465,29 @@ def ask_mallow(question, data):
         "temperature" in question
         or "temp" in question
     ):
+        baseline_value = baseline[
+            "wrist_temperature"
+        ]
+
+        latest_value = latest[
+            "wrist_temperature"
+        ]
+
+        difference = (
+            latest_value
+            - baseline_value
+        )
+
+        direction = direction_word(
+            difference
+        )
+
         return (
             f"Your latest synthetic wrist-temperature deviation "
-            f"is {latest['wrist_temperature']:+.2f} °F relative "
-            f"to its personal baseline reference."
+            f"is {latest_value:+.2f} °F. "
+            f"That is {abs(difference):.2f} °F "
+            f"{direction} than your {analysis_days}-day "
+            f"personal average."
         )
 
     # General summary

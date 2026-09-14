@@ -2,10 +2,6 @@ import pandas as pd
 
 
 def get_latest_values(data):
-    """
-    Return the most recent health measurements.
-    """
-
     latest = data.iloc[-1]
 
     return {
@@ -27,13 +23,7 @@ def get_latest_values(data):
 
 
 def get_baseline(data, days=30):
-    """
-    Calculate a rolling personal baseline using the most recent
-    number of days.
-    """
-
     recent = data.tail(days)
-
     numeric_columns = recent.select_dtypes(
         include="number"
     )
@@ -41,12 +31,10 @@ def get_baseline(data, days=30):
     return numeric_columns.mean()
 
 
-def get_standard_deviation(data, days=30):
-    """
-    Calculate variation in each health measurement over the
-    baseline period.
-    """
-
+def get_standard_deviation(
+    data,
+    days=30,
+):
     recent = data.tail(days)
 
     numeric_columns = recent.select_dtypes(
@@ -61,13 +49,13 @@ def get_deviation_from_baseline(
     metric,
     days=30,
 ):
-    """
-    Compare the latest measurement against its recent baseline.
-    """
-
     latest = data.iloc[-1][metric]
 
-    baseline = data.tail(days)[metric].mean()
+    baseline = (
+        data
+        .tail(days)[metric]
+        .mean()
+    )
 
     return latest - baseline
 
@@ -77,14 +65,13 @@ def get_percent_change_from_baseline(
     metric,
     days=30,
 ):
-    """
-    Calculate the percent difference between today's value
-    and the recent baseline.
-    """
-
     latest = data.iloc[-1][metric]
 
-    baseline = data.tail(days)[metric].mean()
+    baseline = (
+        data
+        .tail(days)[metric]
+        .mean()
+    )
 
     if baseline == 0:
         return 0
@@ -101,25 +88,24 @@ def get_z_score(
     metric,
     days=30,
 ):
-    """
-    Measure how unusual the latest value is compared with
-    the person's recent history.
-
-    A z-score near 0 means the value is close to baseline.
-    Larger positive or negative values indicate greater
-    deviation.
-    """
-
     recent = data.tail(days)
 
     latest = recent.iloc[-1][metric]
 
-    baseline = recent[metric].mean()
+    baseline = recent[
+        metric
+    ].mean()
 
-    std = recent[metric].std()
+    std = recent[
+        metric
+    ].std()
 
-    if std == 0:
-        return 0
+    if (
+        len(recent) < 2
+        or pd.isna(std)
+        or std == 0
+    ):
+        return 0.0
 
     return (
         latest - baseline
@@ -130,12 +116,9 @@ def get_health_summary(
     data,
     baseline_days=30,
 ):
-    """
-    Build a compact summary for the dashboard and,
-    eventually, the Mallow assistant.
-    """
-
-    latest = get_latest_values(data)
+    latest = get_latest_values(
+        data
+    )
 
     baseline = get_baseline(
         data,
@@ -162,7 +145,9 @@ def get_health_summary(
     ]
 
     for metric in metrics:
-        summary["deviations"][metric] = (
+        summary[
+            "deviations"
+        ][metric] = (
             get_deviation_from_baseline(
                 data,
                 metric,
@@ -170,7 +155,9 @@ def get_health_summary(
             )
         )
 
-        summary["z_scores"][metric] = (
+        summary[
+            "z_scores"
+        ][metric] = (
             get_z_score(
                 data,
                 metric,
@@ -180,18 +167,25 @@ def get_health_summary(
 
     return summary
 
+
 def get_baseline_status(
     data,
     metric,
     days=30,
 ):
     """
-    Describe how different the latest measurement is from
-    the person's recent baseline.
+    Describe how different the latest measurement is
+    from the person's recent statistical baseline.
 
-    This is a personal-baseline comparison only.
-    It is not a clinical interpretation.
+    This is not a clinical interpretation.
     """
+
+    if days < 2:
+        return {
+            "label": "Single-day view",
+            "level": "neutral",
+            "z_score": 0.0,
+        }
 
     z_score = get_z_score(
         data,
@@ -214,7 +208,10 @@ def get_baseline_status(
         )
 
         return {
-            "label": f"Somewhat {direction} your baseline",
+            "label": (
+                f"Somewhat {direction} "
+                "your baseline"
+            ),
             "level": "watch",
             "z_score": z_score,
         }
@@ -226,7 +223,10 @@ def get_baseline_status(
     )
 
     return {
-        "label": f"Unusually {direction} your baseline",
+        "label": (
+            f"Unusually {direction} "
+            "your baseline"
+        ),
         "level": "unusual",
         "z_score": z_score,
     }
