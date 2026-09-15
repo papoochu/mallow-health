@@ -1,12 +1,23 @@
 # Mallow 🌿
 
 [![Mallow Tests](https://github.com/papoochu/mallow-health/actions/workflows/tests.yml/badge.svg)](https://github.com/papoochu/mallow-health/actions/workflows/tests.yml)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://mallow-health.streamlit.app/)
+
+**Live demo:** https://mallow-health.streamlit.app/
 
 Mallow is a personal health-data dashboard and intelligent health companion prototype built with Python and Streamlit.
 
 The project explores how longitudinal wearable and wellness data can be turned into understandable personal insights without presenting statistical patterns as medical diagnoses. Mallow combines interactive visualization, personal-baseline analysis, trend detection, relationship analysis, anomaly detection, data-quality checks, and a natural-language interface for exploring health measurements.
 
 > **Current prototype:** Mallow currently uses synthetic health data generated locally for development, testing, and demonstration. It is not connected to real patient records or wearable accounts.
+
+## Live demo
+
+A public synthetic-data demo is available on Streamlit Community Cloud:
+
+**https://mallow-health.streamlit.app/**
+
+The deployed version uses the same synthetic-data workflow as the repository and is intended for portfolio demonstration only.
 
 ## What Mallow can do
 
