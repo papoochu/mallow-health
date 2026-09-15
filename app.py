@@ -16,7 +16,25 @@ from src.analytics import (
 from src.anomaly import detect_current_anomaly
 from src.insights import build_anomaly_insight
 from src.assistant import ask_mallow
-from src.relationships import calculate_correlation
+from src.relationships import (
+    all_relationships,
+    calculate_correlation,
+    describe_relationship,
+    get_relationship_data,
+)
+from src.trends import (
+    analyze_trend,
+    format_trend_change,
+)
+from src.comparisons import (
+    compare_metrics,
+    format_average,
+    format_difference,
+)
+from src.data_quality import (
+    intraday_quality,
+    window_quality,
+)
 
 
 st.set_page_config(
@@ -30,18 +48,14 @@ def format_clock_time(timestamp):
     """
     Format a timestamp as a friendly 12-hour time.
 
-    This avoids platform-specific strftime flags so it
-    works on Windows, macOS, and Linux.
+    Avoids platform-specific strftime flags so it works
+    consistently on Windows, macOS, and Linux.
     """
 
     if pd.isna(timestamp):
         return "Unknown time"
 
-    return (
-        timestamp
-        .strftime("%I:%M %p")
-        .lstrip("0")
-    )
+    return timestamp.strftime("%I:%M %p").lstrip("0")
 
 
 health_data = generate_health_data(
@@ -57,7 +71,6 @@ health_summary = get_health_summary(
 latest = health_summary["latest"]
 baseline = health_summary["baseline"]
 
-
 intraday_data = generate_intraday_data(
     health_data.iloc[-1],
     interval_minutes=15,
@@ -66,7 +79,6 @@ intraday_data = generate_intraday_data(
 
 intraday_latest = intraday_data.iloc[-1]
 
-
 bp_readings = intraday_data.dropna(
     subset=[
         "systolic_bp",
@@ -74,18 +86,14 @@ bp_readings = intraday_data.dropna(
     ]
 ).copy()
 
-
 if not bp_readings.empty:
     latest_bp = bp_readings.iloc[-1]
-
     latest_bp_time = format_clock_time(
         latest_bp["timestamp"]
     )
-
 else:
     latest_bp = None
     latest_bp_time = None
-
 
 anomaly_result = detect_current_anomaly(
     health_data
@@ -98,7 +106,6 @@ mallow_insight = build_anomaly_insight(
 
 with st.sidebar:
     st.markdown("## Mallow 🌿")
-
     st.caption(
         "your gentle personal health companion"
     )
@@ -404,6 +411,66 @@ st.markdown(
         line-height: 1.65;
     }}
 
+    .relationship-card {{
+        background-color: {colors["card"]};
+        color: {colors["text"]};
+        border: 1px solid {colors["border"]};
+        border-radius: 20px;
+        padding: 1.15rem 1.2rem;
+        min-height: 175px;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.03);
+    }}
+
+    .relationship-title {{
+        color: {colors["heading"]};
+        font-weight: 700;
+        font-size: 0.95rem;
+        margin-bottom: 0.7rem;
+    }}
+
+    .relationship-r {{
+        color: {colors["text"]};
+        font-size: 1.55rem;
+        font-weight: 700;
+        margin-bottom: 0.35rem;
+    }}
+
+    .relationship-detail {{
+        color: {colors["muted"]};
+        font-size: 0.82rem;
+        line-height: 1.55;
+    }}
+
+    .comparison-card {{
+        background-color: {colors["card"]};
+        color: {colors["text"]};
+        border: 1px solid {colors["border"]};
+        border-radius: 20px;
+        padding: 1.1rem 1.2rem;
+        min-height: 170px;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.03);
+    }}
+
+    .comparison-title {{
+        color: {colors["muted"]};
+        font-size: 0.84rem;
+        font-weight: 600;
+        margin-bottom: 0.55rem;
+    }}
+
+    .comparison-change {{
+        color: {colors["text"]};
+        font-size: 1.55rem;
+        font-weight: 700;
+        margin-bottom: 0.4rem;
+    }}
+
+    .comparison-detail {{
+        color: {colors["muted"]};
+        font-size: 0.80rem;
+        line-height: 1.55;
+    }}
+
     [data-testid="stTextInput"] div[data-baseweb="input"] {{
         background-color: {colors["input"]} !important;
         border: 1px solid {colors["input"]} !important;
@@ -489,6 +556,100 @@ def metric_card(
         f'<div class="metric-detail">{detail}</div>'
         f'<div class="status-{status_type}">{status}</div>'
         f'<div class="source">{source}</div>'
+        f'</div>'
+    )
+
+
+def relationship_card(
+    title,
+    correlation,
+    strength,
+    direction,
+    sample_count,
+    data_support,
+):
+    direction_label = (
+        "little clear direction"
+        if direction == "little clear direction"
+        else f"{direction} association"
+    )
+
+    return (
+        f'<div class="relationship-card">'
+        f'<div class="relationship-title">🌱 {title}</div>'
+        f'<div class="relationship-r">r = {correlation:.2f}</div>'
+        f'<div class="relationship-detail">'
+        f'{strength.capitalize()} • {direction_label}<br>'
+        f'{sample_count} paired daily observations<br>'
+        f'{data_support.capitalize()} data support'
+        f'</div>'
+        f'</div>'
+    )
+
+
+def period_comparison_card(
+    icon,
+    comparison,
+):
+    """
+    Render a neutral comparison card for two adjacent periods.
+    """
+
+    if comparison is None:
+        return (
+            f'<div class="comparison-card">'
+            f'<div class="comparison-title">{icon} Comparison</div>'
+            f'<div class="comparison-change">—</div>'
+            f'<div class="comparison-detail">'
+            f'Not enough history for an equal prior period.'
+            f'</div>'
+            f'</div>'
+        )
+
+    days = comparison[
+        "days"
+    ]
+
+    current_text = format_average(
+        comparison,
+        "current_average",
+    )
+
+    previous_text = format_average(
+        comparison,
+        "previous_average",
+    )
+
+    difference_text = format_difference(
+        comparison
+    )
+
+    if abs(
+        comparison["difference"]
+    ) < 1e-12:
+        percent_text = " • essentially unchanged"
+    elif comparison[
+        "percent_change"
+    ] is None:
+        percent_text = ""
+    else:
+        percent_text = (
+            f" • {abs(comparison['percent_change']):.1f}% "
+            f"{comparison['direction']}"
+        )
+
+    return (
+        f'<div class="comparison-card">'
+        f'<div class="comparison-title">'
+        f'{icon} {comparison["name"]}</div>'
+        f'<div class="comparison-change">'
+        f'{comparison["arrow"]} {difference_text}</div>'
+        f'<div class="comparison-detail">'
+        f'Recent {days} days: {current_text}<br>'
+        f'Previous {days} days: {previous_text}<br>'
+        f'Compared with prior period'
+        f'{percent_text}'
+        f'</div>'
         f'</div>'
     )
 
@@ -601,7 +762,6 @@ if view_days == 1:
         "Here is your synthetic health snapshot so far today. "
         "Measurements update across the intraday timeline."
     )
-
 else:
     welcome_text = (
         f"Showing your recent {view_days}-day health trends "
@@ -651,31 +811,24 @@ with overview_tab:
     row1 = st.columns(4)
 
     if view_days == 1:
-
         current_hr = intraday_latest[
             "heart_rate"
         ]
-
         today_hr_average = intraday_data[
             "heart_rate"
         ].mean()
-
         current_glucose = intraday_latest[
             "glucose"
         ]
-
         current_oxygen = intraday_latest[
             "oxygen_saturation"
         ]
-
         current_hrv = intraday_latest[
             "hrv"
         ]
-
         current_resp = intraday_latest[
             "respiratory_rate"
         ]
-
         current_temp = intraday_latest[
             "wrist_temperature"
         ]
@@ -684,25 +837,20 @@ with overview_tab:
             current_systolic = latest_bp[
                 "systolic_bp"
             ]
-
             current_diastolic = latest_bp[
                 "diastolic_bp"
             ]
-
             bp_detail = (
                 f"Latest cuff reading • "
                 f"{latest_bp_time}"
             )
-
         else:
             current_systolic = latest[
                 "systolic_bp"
             ]
-
             current_diastolic = latest[
                 "diastolic_bp"
             ]
-
             bp_detail = (
                 "No cuff reading yet today"
             )
@@ -710,68 +858,52 @@ with overview_tab:
         live_status = (
             "Today's synthetic reading"
         )
-
         live_style = "neutral"
 
     else:
-
         current_hr = latest[
             "resting_hr"
         ]
-
         current_glucose = latest[
             "glucose"
         ]
-
         current_oxygen = latest[
             "oxygen_saturation"
         ]
-
         current_hrv = latest[
             "hrv"
         ]
-
         current_resp = latest[
             "respiratory_rate"
         ]
-
         current_temp = latest[
             "wrist_temperature"
         ]
-
         current_systolic = latest[
             "systolic_bp"
         ]
-
         current_diastolic = latest[
             "diastolic_bp"
         ]
 
     with row1[0]:
-
         if view_days == 1:
             title = "Heart rate"
-
             detail = (
                 f"Today's average: "
                 f"{today_hr_average:.0f} bpm"
             )
-
             status = live_status
             style = live_style
-
         else:
             title = "Resting heart rate"
-
             detail = (
                 f"30-day baseline: "
                 f"{baseline['resting_hr']:.0f} bpm"
             )
-
             status = status_for(
                 "resting_hr"
             )["label"]
-
             style = status_style(
                 "resting_hr"
             )
@@ -789,7 +921,6 @@ with overview_tab:
         )
 
     with row1[1]:
-
         render_html(
             metric_card(
                 "🩸",
@@ -822,7 +953,6 @@ with overview_tab:
         )
 
     with row1[2]:
-
         render_html(
             metric_card(
                 "🍬",
@@ -856,7 +986,6 @@ with overview_tab:
         )
 
     with row1[3]:
-
         render_html(
             metric_card(
                 "🫁",
@@ -894,7 +1023,6 @@ with overview_tab:
     row2 = st.columns(4)
 
     with row2[0]:
-
         render_html(
             metric_card(
                 "💓",
@@ -928,7 +1056,6 @@ with overview_tab:
         )
 
     with row2[1]:
-
         render_html(
             metric_card(
                 "🌡️",
@@ -960,7 +1087,6 @@ with overview_tab:
         )
 
     with row2[2]:
-
         render_html(
             metric_card(
                 "🌬️",
@@ -994,7 +1120,6 @@ with overview_tab:
         )
 
     with row2[3]:
-
         render_html(
             metric_card(
                 "😴",
@@ -1029,7 +1154,6 @@ with overview_tab:
     st.write("")
 
     if view_days == 1:
-
         st.subheader(
             "Throughout today ⏱️"
         )
@@ -1192,7 +1316,6 @@ with overview_tab:
         )
 
     else:
-
         st.subheader(
             f"{view_days}-day resting heart-rate trend"
         )
@@ -1276,6 +1399,295 @@ with overview_tab:
             },
         )
 
+        st.write("")
+        st.subheader(
+            "Recent trends 🌱"
+        )
+
+        st.caption(
+            "These summarize the overall direction of each "
+            "measurement across the selected window. They do "
+            "not indicate whether a change is medically good "
+            "or bad."
+        )
+
+        trend_metrics = [
+            (
+                "❤️",
+                "resting_hr",
+            ),
+            (
+                "💓",
+                "hrv",
+            ),
+            (
+                "😴",
+                "sleep_hours",
+            ),
+            (
+                "🍬",
+                "glucose",
+            ),
+        ]
+
+        trend_columns = st.columns(
+            4
+        )
+
+        for (
+            trend_column,
+            (
+                trend_icon,
+                trend_metric,
+            ),
+        ) in zip(
+            trend_columns,
+            trend_metrics,
+        ):
+            trend = analyze_trend(
+                health_data,
+                trend_metric,
+                days=view_days,
+            )
+
+            with trend_column:
+                if trend is None:
+                    render_html(
+                        metric_card(
+                            trend_icon,
+                            trend_metric.replace(
+                                "_",
+                                " ",
+                            ).title(),
+                            "—",
+                            "Not enough recent data",
+                            "Awaiting data",
+                            "🌿 Calculated by Mallow",
+                            "neutral",
+                        )
+                    )
+                else:
+                    if trend[
+                        "direction"
+                    ] == "up":
+                        trend_value = (
+                            "↑ "
+                            + trend[
+                                "label"
+                            ].replace(
+                                "Clearly ",
+                                "",
+                            ).replace(
+                                "Gradually ",
+                                "",
+                            ).capitalize()
+                        )
+                    elif trend[
+                        "direction"
+                    ] == "down":
+                        trend_value = (
+                            "↓ "
+                            + trend[
+                                "label"
+                            ].replace(
+                                "Clearly ",
+                                "",
+                            ).replace(
+                                "Gradually ",
+                                "",
+                            ).capitalize()
+                        )
+                    else:
+                        trend_value = (
+                            "→ No clear trend"
+                        )
+
+                    render_html(
+                        metric_card(
+                            trend_icon,
+                            trend["name"],
+                            trend_value,
+                            (
+                                "Estimated change: "
+                                + format_trend_change(
+                                    trend
+                                )
+                            ),
+                            (
+                                f"{trend['data_support'].capitalize()} "
+                                "data support"
+                            ),
+                            "🌿 Calculated by Mallow",
+                            "neutral",
+                        )
+                    )
+
+        st.caption(
+            "Trend direction is estimated from a simple fitted "
+            "line through the selected days. Data support reflects "
+            "how much usable history backs the estimate; it is not "
+            "a clinical confidence score."
+        )
+
+        if view_days in [
+            7,
+            30,
+        ]:
+            st.write("")
+            st.subheader(
+                "Compared with the previous period ↔️"
+            )
+
+            st.caption(
+                f"The most recent {view_days} days are compared "
+                f"with the {view_days} days immediately before them. "
+                "Higher or lower does not automatically mean "
+                "healthier or less healthy."
+            )
+
+            comparison_metrics = [
+                "resting_hr",
+                "hrv",
+                "sleep_hours",
+                "glucose",
+            ]
+
+            comparison_icons = {
+                "resting_hr": "❤️",
+                "hrv": "💓",
+                "sleep_hours": "😴",
+                "glucose": "🍬",
+            }
+
+            period_results = compare_metrics(
+                health_data,
+                comparison_metrics,
+                days=view_days,
+            )
+
+            period_lookup = {
+                item["metric"]: item
+                for item in period_results
+            }
+
+            comparison_columns = st.columns(
+                4
+            )
+
+            for (
+                comparison_column,
+                comparison_metric,
+            ) in zip(
+                comparison_columns,
+                comparison_metrics,
+            ):
+                with comparison_column:
+                    render_html(
+                        period_comparison_card(
+                            comparison_icons[
+                                comparison_metric
+                            ],
+                            period_lookup.get(
+                                comparison_metric
+                            ),
+                        )
+                    )
+
+            st.caption(
+                "Period comparisons use simple averages and are "
+                "descriptive only. They do not account for illness, "
+                "medications, exercise, menstrual cycle, device "
+                "changes, or other context."
+            )
+
+        elif view_days == 90:
+            st.write("")
+            st.caption(
+                "A previous 90-day comparison is not shown because "
+                "the current synthetic demo contains 90 days of "
+                "history. Mallow only compares equal-length periods "
+                "when both are fully available."
+            )
+
+    st.write("")
+    st.subheader(
+        "Data quality 🔎"
+    )
+
+    if view_days == 1:
+        quality = intraday_quality(
+            intraday_data
+        )
+
+        quality_columns = st.columns(
+            3
+        )
+
+        quality_columns[0].metric(
+            "Samples so far today",
+            quality[
+                "sample_count"
+            ],
+        )
+
+        quality_columns[1].metric(
+            "Core signal coverage",
+            (
+                f"{quality['coverage_percent']:.0f}%"
+            ),
+        )
+
+        quality_columns[2].metric(
+            "Data support",
+            quality[
+                "support"
+            ].capitalize(),
+        )
+
+        st.caption(
+            "Today coverage summarizes the synthetic intraday "
+            "signals currently available. Discrete measurements "
+            "such as cuff blood pressure are evaluated separately."
+        )
+
+    else:
+        quality = window_quality(
+            health_data,
+            days=view_days,
+        )
+
+        quality_columns = st.columns(
+            3
+        )
+
+        quality_columns[0].metric(
+            "Daily window",
+            (
+                f"{quality['requested_days']} days"
+            ),
+        )
+
+        quality_columns[1].metric(
+            "Core metric coverage",
+            (
+                f"{quality['coverage_percent']:.0f}%"
+            ),
+        )
+
+        quality_columns[2].metric(
+            "Data support",
+            quality[
+                "support"
+            ].capitalize(),
+        )
+
+        st.caption(
+            "Data support describes how much usable history is "
+            "available for analysis. It is not statistical or "
+            "clinical certainty. This synthetic demo currently "
+            "has intentionally complete daily data."
+        )
+
     st.subheader(
         "Mallow noticed 🌱"
     )
@@ -1299,19 +1711,43 @@ with overview_tab:
         "Ask Mallow 💬"
     )
 
+    if view_days == 1:
+        assistant_window_text = (
+            "Today view uses a 30-day window for longer-term "
+            "trend and relationship questions unless you name "
+            "another period."
+        )
+        assistant_days = 30
+    else:
+        assistant_window_text = (
+            f"Questions use the selected {view_days}-day window "
+            f"unless you name another period."
+        )
+        assistant_days = view_days
+
+    st.caption(
+        assistant_window_text
+    )
+
     question = st.text_input(
         "Ask something about your health data",
         placeholder=(
-            "Does my sleep seem related to my heart rate?"
+            "How is my HRV trending over the last 30 days?"
         ),
         label_visibility="collapsed",
     )
 
-    if question:
+    st.caption(
+        "Try: “What is related to my sleep?” • "
+        "“Is my resting heart rate trending down?” • "
+        "“What was my average glucose over the last 7 days?”"
+    )
 
+    if question:
         answer = ask_mallow(
             question,
             health_data,
+            analysis_days=assistant_days,
         )
 
         render_html(
@@ -1342,7 +1778,6 @@ with heart_tab:
     )
 
     with heart_columns[0]:
-
         render_html(
             metric_card(
                 "❤️",
@@ -1386,7 +1821,6 @@ with heart_tab:
         )
 
     with heart_columns[1]:
-
         render_html(
             metric_card(
                 "💓",
@@ -1426,7 +1860,6 @@ with heart_tab:
         )
 
     with heart_columns[2]:
-
         render_html(
             metric_card(
                 "🫀",
@@ -1446,7 +1879,6 @@ with heart_tab:
     )
 
     with heart_columns_2[0]:
-
         if (
             view_days == 1
             and latest_bp is not None
@@ -1455,31 +1887,25 @@ with heart_tab:
                 f"{latest_bp['systolic_bp']:.0f} / "
                 f"{latest_bp['diastolic_bp']:.0f}"
             )
-
             bp_detail_text = (
                 f"Latest cuff reading • "
                 f"{latest_bp_time}"
             )
-
             bp_label = (
                 "Discrete measurement"
             )
-
             bp_card_style = (
                 "neutral"
             )
 
         elif view_days == 1:
             bp_value = "—"
-
             bp_detail_text = (
                 "No cuff reading yet today"
             )
-
             bp_label = (
                 "Awaiting measurement"
             )
-
             bp_card_style = (
                 "neutral"
             )
@@ -1489,16 +1915,13 @@ with heart_tab:
                 f"{latest['systolic_bp']:.0f} / "
                 f"{latest['diastolic_bp']:.0f}"
             )
-
             bp_detail_text = (
                 f"Pulse pressure: "
                 f"{latest['pulse_pressure']:.0f} mmHg"
             )
-
             bp_label = (
                 bp_status["label"]
             )
-
             bp_card_style = (
                 bp_style
             )
@@ -1516,7 +1939,6 @@ with heart_tab:
         )
 
     with heart_columns_2[1]:
-
         render_html(
             metric_card(
                 "📊",
@@ -1532,7 +1954,6 @@ with heart_tab:
         )
 
     with heart_columns_2[2]:
-
         render_html(
             metric_card(
                 "🏃",
@@ -1546,7 +1967,6 @@ with heart_tab:
         )
 
     if view_days == 1:
-
         st.write("")
 
         st.subheader(
@@ -1554,13 +1974,10 @@ with heart_tab:
         )
 
         if bp_readings.empty:
-
             st.info(
                 "No synthetic cuff readings are available yet today."
             )
-
         else:
-
             bp_summary_columns = (
                 st.columns(3)
             )
@@ -1680,7 +2097,6 @@ with heart_tab:
     )
 
     with rhythm_columns[0]:
-
         render_html(
             metric_card(
                 "💗",
@@ -1694,7 +2110,6 @@ with heart_tab:
         )
 
     with rhythm_columns[1]:
-
         render_html(
             metric_card(
                 "🫀",
@@ -1708,7 +2123,6 @@ with heart_tab:
         )
 
     with rhythm_columns[2]:
-
         render_html(
             metric_card(
                 "🚶",
@@ -1733,7 +2147,6 @@ with metabolic_tab:
     )
 
     with metabolic_columns[0]:
-
         render_html(
             metric_card(
                 "🍬",
@@ -1773,9 +2186,7 @@ with metabolic_tab:
         )
 
     with metabolic_columns[1]:
-
         if view_days == 1:
-
             today_glucose = (
                 intraday_data[
                     "glucose"
@@ -1791,9 +2202,7 @@ with metabolic_tab:
             glucose_cv_detail = (
                 "Today's coefficient of variation"
             )
-
         else:
-
             glucose_window = (
                 health_data
                 .tail(30)[
@@ -1824,7 +2233,6 @@ with metabolic_tab:
         )
 
     with metabolic_columns[2]:
-
         render_html(
             metric_card(
                 "⚖️",
@@ -1899,7 +2307,6 @@ with sleep_tab:
     )
 
     with sleep_columns[0]:
-
         render_html(
             metric_card(
                 "😴",
@@ -1922,7 +2329,6 @@ with sleep_tab:
         )
 
     with sleep_columns[1]:
-
         render_html(
             metric_card(
                 "🌙",
@@ -1940,7 +2346,6 @@ with sleep_tab:
         )
 
     with sleep_columns[2]:
-
         render_html(
             metric_card(
                 "💭",
@@ -1958,7 +2363,6 @@ with sleep_tab:
         )
 
     with sleep_columns[3]:
-
         render_html(
             metric_card(
                 "🛏️",
@@ -1980,7 +2384,6 @@ with sleep_tab:
     )
 
     with respiratory_columns[0]:
-
         render_html(
             metric_card(
                 "🌬️",
@@ -2020,7 +2423,6 @@ with sleep_tab:
         )
 
     with respiratory_columns[1]:
-
         render_html(
             metric_card(
                 "🫁",
@@ -2060,7 +2462,6 @@ with sleep_tab:
         )
 
     with respiratory_columns[2]:
-
         render_html(
             metric_card(
                 "🌡️",
@@ -2105,7 +2506,6 @@ with relationships_tab:
     )
 
     if view_days == 1:
-
         st.info(
             "Relationship analysis is intended for patterns "
             "across multiple days. Choose 7, 30, or 90 days "
@@ -2118,9 +2518,78 @@ with relationships_tab:
         )
 
     else:
-
         st.caption(
+            "Mallow looks for measurements that have tended "
+            "to move together in your selected window. "
             "Correlation describes association, not causation."
+        )
+
+        discovered_relationships = all_relationships(
+            health_data,
+            days=view_days,
+            minimum_strength=0.35,
+        )
+
+        st.markdown(
+            "### Mallow noticed 🌱"
+        )
+
+        if discovered_relationships:
+            discovery_columns = st.columns(
+                3
+            )
+
+            for column, result in zip(
+                discovery_columns,
+                discovered_relationships[:3],
+            ):
+                with column:
+                    title = (
+                        f"{result['metric_a_name'].title()} "
+                        f"↔ {result['metric_b_name'].title()}"
+                    )
+
+                    render_html(
+                        relationship_card(
+                            title=title,
+                            correlation=result[
+                                "correlation"
+                            ],
+                            strength=result[
+                                "strength"
+                            ],
+                            direction=result[
+                                "direction"
+                            ],
+                            sample_count=result[
+                                "sample_count"
+                            ],
+                            data_support=result[
+                                "data_support"
+                            ],
+                        )
+                    )
+        else:
+            st.info(
+                "I don't see a clear relationship stronger "
+                "than |r| = 0.35 in this window."
+            )
+
+        if view_days == 7:
+            st.caption(
+                "Seven days is a very small sample, so these "
+                "relationships can change quickly. Longer windows "
+                "are generally more stable."
+            )
+        else:
+            st.caption(
+                "These are exploratory statistical patterns in "
+                "your recent data, not medical conclusions."
+            )
+
+        st.write("")
+        st.markdown(
+            "### Compare two measurements"
         )
 
         available_metrics = {
@@ -2140,23 +2609,23 @@ with relationships_tab:
         )
 
         with selectors[0]:
-
             metric_a_name = st.selectbox(
                 "First measurement",
                 list(
                     available_metrics.keys()
                 ),
                 index=0,
+                key="relationship_metric_a",
             )
 
         with selectors[1]:
-
             metric_b_name = st.selectbox(
                 "Second measurement",
                 list(
                     available_metrics.keys()
                 ),
                 index=1,
+                key="relationship_metric_b",
             )
 
         metric_a = available_metrics[
@@ -2168,19 +2637,16 @@ with relationships_tab:
         ]
 
         if metric_a == metric_b:
-
             st.info(
                 "Choose two different measurements."
             )
 
         else:
-
-            relationship_data = (
-                health_data
-                .tail(
-                    view_days
-                )
-                .copy()
+            relationship_data = get_relationship_data(
+                health_data,
+                metric_a,
+                metric_b,
+                days=view_days,
             )
 
             correlation = calculate_correlation(
@@ -2190,167 +2656,135 @@ with relationships_tab:
                 days=view_days,
             )
 
-            x = relationship_data[
-                metric_a
-            ].to_numpy()
-
-            y = relationship_data[
-                metric_b
-            ].to_numpy()
-
-            slope, intercept = np.polyfit(
-                x,
-                y,
-                1,
-            )
-
-            x_line = np.linspace(
-                x.min(),
-                x.max(),
-                100,
-            )
-
-            y_line = (
-                slope
-                * x_line
-                + intercept
-            )
-
-            relationship_fig = (
-                go.Figure()
-            )
-
-            relationship_fig.add_trace(
-                go.Scatter(
-                    x=x,
-                    y=y,
-                    mode="markers",
-                    name="Daily measurements",
-                    marker=dict(
-                        size=9,
-                        color=colors[
-                            "chart_line"
-                        ],
-                        opacity=0.85,
-                    ),
-                    hovertemplate=(
-                        f"{metric_a_name}: "
-                        "%{x:.2f}<br>"
-                        f"{metric_b_name}: "
-                        "%{y:.2f}"
-                        "<extra></extra>"
-                    ),
+            if (
+                correlation is None
+                or len(
+                    relationship_data
+                ) < 5
+            ):
+                st.info(
+                    "There isn't enough usable variation in "
+                    "this window to compare those measurements "
+                    "reliably yet."
                 )
-            )
 
-            relationship_fig.add_trace(
-                go.Scatter(
-                    x=x_line,
-                    y=y_line,
-                    mode="lines",
-                    name="Trend",
-                    line=dict(
-                        color=colors[
-                            "chart_average"
-                        ],
-                        width=3,
-                        dash="dot",
-                    ),
+            else:
+                x = relationship_data[
+                    metric_a
+                ].to_numpy()
+
+                y = relationship_data[
+                    metric_b
+                ].to_numpy()
+
+                slope, intercept = np.polyfit(
+                    x,
+                    y,
+                    1,
                 )
-            )
 
-            relationship_fig.update_xaxes(
-                **chart_xaxis(
-                    metric_a_name
+                x_line = np.linspace(
+                    x.min(),
+                    x.max(),
+                    100,
                 )
-            )
 
-            relationship_fig.update_yaxes(
-                **chart_yaxis(
-                    metric_b_name
+                y_line = (
+                    slope
+                    * x_line
+                    + intercept
                 )
-            )
 
-            apply_chart_style(
-                relationship_fig,
-                height=450,
-                showlegend=True,
-            )
+                relationship_fig = (
+                    go.Figure()
+                )
 
-            st.plotly_chart(
-                relationship_fig,
-                use_container_width=True,
-                config={
-                    "displayModeBar": False,
-                },
-            )
-
-            if correlation is not None:
-
-                if abs(
-                    correlation
-                ) < 0.2:
-                    strength = (
-                        "very little"
+                relationship_fig.add_trace(
+                    go.Scatter(
+                        x=x,
+                        y=y,
+                        mode="markers",
+                        name="Daily measurements",
+                        marker=dict(
+                            size=10,
+                            color=colors[
+                                "chart_line"
+                            ],
+                            opacity=0.88,
+                        ),
+                        hovertemplate=(
+                            f"{metric_a_name}: "
+                            "%{x:.2f}<br>"
+                            f"{metric_b_name}: "
+                            "%{y:.2f}"
+                            "<extra></extra>"
+                        ),
                     )
+                )
 
-                elif abs(
-                    correlation
-                ) < 0.4:
-                    strength = (
-                        "a weak"
+                relationship_fig.add_trace(
+                    go.Scatter(
+                        x=x_line,
+                        y=y_line,
+                        mode="lines",
+                        name="Trend",
+                        line=dict(
+                            color=colors[
+                                "chart_average"
+                            ],
+                            width=3,
+                            dash="dot",
+                        ),
                     )
+                )
 
-                elif abs(
-                    correlation
-                ) < 0.6:
-                    strength = (
-                        "a moderate"
+                relationship_fig.update_xaxes(
+                    **chart_xaxis(
+                        metric_a_name
                     )
+                )
 
-                elif abs(
-                    correlation
-                ) < 0.8:
-                    strength = (
-                        "a fairly strong"
+                relationship_fig.update_yaxes(
+                    **chart_yaxis(
+                        metric_b_name
                     )
+                )
 
-                else:
-                    strength = (
-                        "a strong"
-                    )
+                apply_chart_style(
+                    relationship_fig,
+                    height=450,
+                    showlegend=True,
+                )
 
-                if correlation > 0:
-                    direction = (
-                        "positive"
-                    )
+                st.plotly_chart(
+                    relationship_fig,
+                    use_container_width=True,
+                    config={
+                        "displayModeBar": False,
+                    },
+                )
 
-                elif correlation < 0:
-                    direction = (
-                        "negative"
+                relationship_summary = (
+                    describe_relationship(
+                        health_data,
+                        metric_a,
+                        metric_b,
+                        days=view_days,
                     )
-
-                else:
-                    direction = (
-                        "neutral"
-                    )
+                )
 
                 render_html(
                     f"""
                     <div class="insight-card">
                         🌿 <b>Mallow's observation</b>
                         <br><br>
-                        Over the last {view_days} days,
-                        I found {strength} {direction}
-                        relationship between
-                        {metric_a_name.lower()} and
-                        {metric_b_name.lower()}
-                        (r = {correlation:.2f}).
+                        {relationship_summary}
                         <br><br>
                         <span style="color:{colors["muted"]};">
-                            This is an association in the data
-                            and does not show that one measurement
-                            caused another.
+                            Paired observations used:
+                            {len(relationship_data)}.
+                            Correlation does not establish
+                            cause and effect.
                         </span>
                     </div>
                     """

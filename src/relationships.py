@@ -1,5 +1,7 @@
 import numpy as np
 
+from src.data_quality import classify_data_support
+
 
 FRIENDLY_NAMES = {
     "resting_hr": "resting heart rate",
@@ -12,6 +14,51 @@ FRIENDLY_NAMES = {
     "wrist_temperature": "wrist temperature",
     "sleep_hours": "sleep duration",
 }
+
+
+MIN_CORRELATION_SAMPLES = 5
+
+
+def friendly_name(metric):
+    """
+    Return a readable display name for a metric key.
+    """
+
+    return FRIENDLY_NAMES.get(
+        metric,
+        metric.replace("_", " "),
+    )
+
+
+def get_relationship_data(
+    data,
+    metric_a,
+    metric_b,
+    days=30,
+):
+    """
+    Return aligned, non-missing observations for two metrics.
+
+    The most recent `days` rows are used so relationship
+    analysis follows the selected dashboard window.
+    """
+
+    if (
+        metric_a not in data.columns
+        or metric_b not in data.columns
+    ):
+        return data.iloc[0:0].copy()
+
+    return (
+        data.tail(days)[
+            [
+                metric_a,
+                metric_b,
+            ]
+        ]
+        .dropna()
+        .copy()
+    )
 
 
 def calculate_correlation(
@@ -28,11 +75,20 @@ def calculate_correlation(
     It does not establish causation.
     """
 
-    recent = data.tail(days)[
-        [metric_a, metric_b]
-    ].dropna()
+    recent = get_relationship_data(
+        data,
+        metric_a,
+        metric_b,
+        days=days,
+    )
 
-    if len(recent) < 5:
+    if len(recent) < MIN_CORRELATION_SAMPLES:
+        return None
+
+    if (
+        recent[metric_a].nunique() < 2
+        or recent[metric_b].nunique() < 2
+    ):
         return None
 
     correlation = recent[
@@ -70,6 +126,25 @@ def describe_strength(correlation):
     return "a strong relationship"
 
 
+def relationship_direction(
+    correlation,
+):
+    """
+    Return a plain-language direction label.
+    """
+
+    if abs(correlation) < 0.2:
+        return "little clear direction"
+
+    if correlation > 0:
+        return "positive"
+
+    if correlation < 0:
+        return "negative"
+
+    return "neutral"
+
+
 def describe_relationship(
     data,
     metric_a,
@@ -90,18 +165,17 @@ def describe_relationship(
 
     if correlation is None:
         return (
-            "There isn't enough usable data to compare "
-            "those measurements yet."
+            "There isn't enough usable variation "
+            "in the recent data to compare those "
+            "measurements reliably yet."
         )
 
-    name_a = FRIENDLY_NAMES.get(
-        metric_a,
-        metric_a.replace("_", " "),
+    name_a = friendly_name(
+        metric_a
     )
 
-    name_b = FRIENDLY_NAMES.get(
-        metric_b,
-        metric_b.replace("_", " "),
+    name_b = friendly_name(
+        metric_b
     )
 
     strength = describe_strength(
@@ -128,11 +202,30 @@ def describe_relationship(
             f"{name_b}"
         )
 
+    relationship_data = get_relationship_data(
+        data,
+        metric_a,
+        metric_b,
+        days=days,
+    )
+
+    support = classify_data_support(
+        len(
+            relationship_data
+        ),
+        min(
+            days,
+            len(data),
+        ),
+    )
+
     return (
         f"{direction_text} over the last {days} days "
-        f"(r = {correlation:.2f}). "
-        f"This is an association in your data and does "
-        f"not show that one measurement caused the other."
+        f"(r = {correlation:.2f}). Data support is "
+        f"{support} based on {len(relationship_data)} paired "
+        f"daily observations. This is an association in your "
+        f"data and does not show that one measurement caused "
+        f"the other."
     )
 
 
@@ -141,11 +234,22 @@ def strongest_relationships(
     target_metric,
     days=30,
     top_n=3,
+    minimum_strength=0.0,
 ):
     """
     Find which monitored metrics have the strongest
     correlations with a selected target metric.
+
+    Results are sorted by absolute correlation so both
+    strong positive and strong negative relationships
+    can surface.
+
+    `minimum_strength` can be used to hide very small
+    correlations.
     """
+
+    if target_metric not in data.columns:
+        return []
 
     metrics = [
         metric
@@ -157,18 +261,170 @@ def strongest_relationships(
     results = []
 
     for metric in metrics:
-        correlation = calculate_correlation(
-            data,
-            target_metric,
-            metric,
-            days,
+
+        relationship_data = (
+            get_relationship_data(
+                data,
+                target_metric,
+                metric,
+                days=days,
+            )
         )
 
-        if correlation is not None:
+        correlation = (
+            calculate_correlation(
+                data,
+                target_metric,
+                metric,
+                days,
+            )
+        )
+
+        if correlation is None:
+            continue
+
+        if (
+            abs(correlation)
+            < minimum_strength
+        ):
+            continue
+
+        results.append(
+            {
+                "metric": metric,
+                "metric_name": friendly_name(
+                    metric
+                ),
+                "correlation": correlation,
+                "strength": describe_strength(
+                    correlation
+                ),
+                "direction": (
+                    relationship_direction(
+                        correlation
+                    )
+                ),
+                "sample_count": len(
+                    relationship_data
+                ),
+                "data_support": classify_data_support(
+                    len(
+                        relationship_data
+                    ),
+                    min(
+                        days,
+                        len(data),
+                    ),
+                ),
+            }
+        )
+
+    results.sort(
+        key=lambda item: abs(
+            item["correlation"]
+        ),
+        reverse=True,
+    )
+
+    return results[:top_n]
+
+
+def all_relationships(
+    data,
+    days=30,
+    minimum_strength=0.0,
+):
+    """
+    Return every unique analyzable metric pair,
+    ranked by strength.
+
+    This supports a future automatic discovery view
+    where Mallow can surface interesting relationships
+    without requiring the user to choose both
+    measurements first.
+    """
+
+    metrics = [
+        metric
+        for metric in FRIENDLY_NAMES
+        if metric in data.columns
+    ]
+
+    results = []
+
+    for index, metric_a in enumerate(
+        metrics
+    ):
+        for metric_b in metrics[
+            index + 1:
+        ]:
+
+            relationship_data = (
+                get_relationship_data(
+                    data,
+                    metric_a,
+                    metric_b,
+                    days=days,
+                )
+            )
+
+            correlation = (
+                calculate_correlation(
+                    data,
+                    metric_a,
+                    metric_b,
+                    days=days,
+                )
+            )
+
+            if correlation is None:
+                continue
+
+            if (
+                abs(correlation)
+                < minimum_strength
+            ):
+                continue
+
             results.append(
                 {
-                    "metric": metric,
-                    "correlation": correlation,
+                    "metric_a": metric_a,
+                    "metric_b": metric_b,
+                    "metric_a_name": (
+                        friendly_name(
+                            metric_a
+                        )
+                    ),
+                    "metric_b_name": (
+                        friendly_name(
+                            metric_b
+                        )
+                    ),
+                    "correlation": (
+                        correlation
+                    ),
+                    "strength": (
+                        describe_strength(
+                            correlation
+                        )
+                    ),
+                    "direction": (
+                        relationship_direction(
+                            correlation
+                        )
+                    ),
+                    "sample_count": len(
+                        relationship_data
+                    ),
+                    "data_support": classify_data_support(
+                        len(
+                            relationship_data
+                        ),
+                        min(
+                            days,
+                            len(data),
+                        ),
+                    ),
                 }
             )
 
@@ -179,4 +435,4 @@ def strongest_relationships(
         reverse=True,
     )
 
-    return results[:top_n]
+    return results
