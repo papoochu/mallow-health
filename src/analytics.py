@@ -1,29 +1,83 @@
+import numpy as np
 import pandas as pd
 
 
-def get_latest_values(data):
-    latest = data.iloc[-1]
+SUMMARY_METRICS = [
+    "resting_hr",
+    "hrv",
+    "systolic_bp",
+    "diastolic_bp",
+    "pulse_pressure",
+    "map",
+    "glucose",
+    "oxygen_saturation",
+    "respiratory_rate",
+    "wrist_temperature",
+    "sleep_hours",
+    "deep_sleep_hours",
+    "rem_sleep_hours",
+]
 
-    return {
-        "date": latest["date"],
-        "resting_hr": latest["resting_hr"],
-        "hrv": latest["hrv"],
-        "systolic_bp": latest["systolic_bp"],
-        "diastolic_bp": latest["diastolic_bp"],
-        "pulse_pressure": latest["pulse_pressure"],
-        "map": latest["map"],
-        "glucose": latest["glucose"],
-        "oxygen_saturation": latest["oxygen_saturation"],
-        "respiratory_rate": latest["respiratory_rate"],
-        "wrist_temperature": latest["wrist_temperature"],
-        "sleep_hours": latest["sleep_hours"],
-        "deep_sleep_hours": latest["deep_sleep_hours"],
-        "rem_sleep_hours": latest["rem_sleep_hours"],
+
+def _latest_nonmissing_value(
+    data,
+    metric,
+):
+    if (
+        metric not in data.columns
+        or data.empty
+    ):
+        return np.nan
+
+    values = data[
+        metric
+    ].dropna()
+
+    if values.empty:
+        return np.nan
+
+    return values.iloc[
+        -1
+    ]
+
+
+def get_latest_values(data):
+    if data.empty:
+        return {
+            "date": None,
+            **{
+                metric: np.nan
+                for metric in SUMMARY_METRICS
+            },
+        }
+
+    latest = {
+        "date": data.iloc[
+            -1
+        ].get(
+            "date"
+        ),
     }
 
+    for metric in SUMMARY_METRICS:
+        latest[
+            metric
+        ] = _latest_nonmissing_value(
+            data,
+            metric,
+        )
 
-def get_baseline(data, days=30):
-    recent = data.tail(days)
+    return latest
+
+
+def get_baseline(
+    data,
+    days=30,
+):
+    recent = data.tail(
+        days
+    )
+
     numeric_columns = recent.select_dtypes(
         include="number"
     )
@@ -35,7 +89,9 @@ def get_standard_deviation(
     data,
     days=30,
 ):
-    recent = data.tail(days)
+    recent = data.tail(
+        days
+    )
 
     numeric_columns = recent.select_dtypes(
         include="number"
@@ -49,15 +105,34 @@ def get_deviation_from_baseline(
     metric,
     days=30,
 ):
-    latest = data.iloc[-1][metric]
+    if (
+        metric not in data.columns
+        or data.empty
+    ):
+        return np.nan
 
-    baseline = (
-        data
-        .tail(days)[metric]
-        .mean()
+    recent = (
+        data.tail(
+            days
+        )[
+            metric
+        ]
+        .dropna()
     )
 
-    return latest - baseline
+    if recent.empty:
+        return np.nan
+
+    latest = recent.iloc[
+        -1
+    ]
+
+    baseline = recent.mean()
+
+    return (
+        latest
+        - baseline
+    )
 
 
 def get_percent_change_from_baseline(
@@ -65,19 +140,38 @@ def get_percent_change_from_baseline(
     metric,
     days=30,
 ):
-    latest = data.iloc[-1][metric]
-
-    baseline = (
-        data
-        .tail(days)[metric]
-        .mean()
+    deviation = (
+        get_deviation_from_baseline(
+            data,
+            metric,
+            days=days,
+        )
     )
 
+    if pd.isna(
+        deviation
+    ):
+        return np.nan
+
+    recent = (
+        data.tail(
+            days
+        )[
+            metric
+        ]
+        .dropna()
+    )
+
+    if recent.empty:
+        return np.nan
+
+    baseline = recent.mean()
+
     if baseline == 0:
-        return 0
+        return 0.0
 
     return (
-        (latest - baseline)
+        deviation
         / baseline
         * 100
     )
@@ -88,27 +182,48 @@ def get_z_score(
     metric,
     days=30,
 ):
-    recent = data.tail(days)
+    if (
+        metric not in data.columns
+        or data.empty
+    ):
+        return np.nan
 
-    latest = recent.iloc[-1][metric]
+    recent = (
+        data.tail(
+            days
+        )[
+            metric
+        ]
+        .dropna()
+        .astype(
+            float
+        )
+    )
 
-    baseline = recent[
-        metric
-    ].mean()
+    if recent.empty:
+        return np.nan
 
-    std = recent[
-        metric
-    ].std()
+    latest = recent.iloc[
+        -1
+    ]
+
+    baseline = recent.mean()
+    std = recent.std()
 
     if (
-        len(recent) < 2
-        or pd.isna(std)
+        len(
+            recent
+        ) < 2
+        or pd.isna(
+            std
+        )
         or std == 0
     ):
         return 0.0
 
     return (
-        latest - baseline
+        latest
+        - baseline
     ) / std
 
 
@@ -147,22 +262,22 @@ def get_health_summary(
     for metric in metrics:
         summary[
             "deviations"
-        ][metric] = (
-            get_deviation_from_baseline(
-                data,
-                metric,
-                baseline_days,
-            )
+        ][
+            metric
+        ] = get_deviation_from_baseline(
+            data,
+            metric,
+            baseline_days,
         )
 
         summary[
             "z_scores"
-        ][metric] = (
-            get_z_score(
-                data,
-                metric,
-                baseline_days,
-            )
+        ][
+            metric
+        ] = get_z_score(
+            data,
+            metric,
+            baseline_days,
         )
 
     return summary
@@ -174,11 +289,24 @@ def get_baseline_status(
     days=30,
 ):
     """
-    Describe how different the latest measurement is
+    Describe how different the latest available measurement is
     from the person's recent statistical baseline.
 
+    Missing data is reported explicitly rather than interpreted.
     This is not a clinical interpretation.
     """
+
+    if (
+        metric not in data.columns
+        or data[
+            metric
+        ].dropna().empty
+    ):
+        return {
+            "label": "No data",
+            "level": "neutral",
+            "z_score": np.nan,
+        }
 
     if days < 2:
         return {
@@ -193,14 +321,27 @@ def get_baseline_status(
         days,
     )
 
-    if abs(z_score) < 1:
+    if pd.isna(
+        z_score
+    ):
+        return {
+            "label": "No data",
+            "level": "neutral",
+            "z_score": np.nan,
+        }
+
+    if abs(
+        z_score
+    ) < 1:
         return {
             "label": "Near your usual range",
             "level": "typical",
             "z_score": z_score,
         }
 
-    if abs(z_score) < 2:
+    if abs(
+        z_score
+    ) < 2:
         direction = (
             "above"
             if z_score > 0

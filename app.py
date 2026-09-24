@@ -35,6 +35,7 @@ from src.data_quality import (
     intraday_quality,
     window_quality,
 )
+from src.apple_health import load_apple_health_export
 
 
 st.set_page_config(
@@ -58,10 +59,49 @@ def format_clock_time(timestamp):
     return timestamp.strftime("%I:%M %p").lstrip("0")
 
 
-health_data = generate_health_data(
-    days=90,
-    seed=42,
+if "mallow_data_source" not in st.session_state:
+    st.session_state["mallow_data_source"] = "demo"
+
+if "apple_health_data" not in st.session_state:
+    st.session_state["apple_health_data"] = None
+
+if "apple_health_info" not in st.session_state:
+    st.session_state["apple_health_info"] = None
+
+
+stored_apple_data = st.session_state.get(
+    "apple_health_data"
 )
+
+using_apple_health = (
+    st.session_state.get(
+        "mallow_data_source"
+    ) == "apple"
+    and isinstance(
+        stored_apple_data,
+        pd.DataFrame,
+    )
+    and not stored_apple_data.empty
+)
+
+
+if using_apple_health:
+    health_data = (
+        stored_apple_data
+        .copy()
+        .sort_values(
+            "date"
+        )
+        .reset_index(
+            drop=True
+        )
+    )
+else:
+    health_data = generate_health_data(
+        days=90,
+        seed=42,
+    )
+
 
 health_summary = get_health_summary(
     health_data,
@@ -71,37 +111,77 @@ health_summary = get_health_summary(
 latest = health_summary["latest"]
 baseline = health_summary["baseline"]
 
-intraday_data = generate_intraday_data(
-    health_data.iloc[-1],
-    interval_minutes=15,
-    seed=84,
-)
 
-intraday_latest = intraday_data.iloc[-1]
-
-bp_readings = intraday_data.dropna(
-    subset=[
-        "systolic_bp",
-        "diastolic_bp",
-    ]
-).copy()
-
-if not bp_readings.empty:
-    latest_bp = bp_readings.iloc[-1]
-    latest_bp_time = format_clock_time(
-        latest_bp["timestamp"]
+if using_apple_health:
+    intraday_data = pd.DataFrame(
+        columns=[
+            "timestamp",
+            "heart_rate",
+            "hrv",
+            "glucose",
+            "oxygen_saturation",
+            "respiratory_rate",
+            "wrist_temperature",
+            "systolic_bp",
+            "diastolic_bp",
+        ]
     )
-else:
+
+    intraday_latest = None
     latest_bp = None
     latest_bp_time = None
 
-anomaly_result = detect_current_anomaly(
-    health_data
-)
+else:
+    intraday_data = generate_intraday_data(
+        health_data.iloc[-1],
+        interval_minutes=15,
+        seed=84,
+    )
 
-mallow_insight = build_anomaly_insight(
-    anomaly_result
-)
+    intraday_latest = intraday_data.iloc[
+        -1
+    ]
+
+    bp_readings = intraday_data.dropna(
+        subset=[
+            "systolic_bp",
+            "diastolic_bp",
+        ]
+    ).copy()
+
+    if not bp_readings.empty:
+        latest_bp = bp_readings.iloc[
+            -1
+        ]
+
+        latest_bp_time = format_clock_time(
+            latest_bp[
+                "timestamp"
+            ]
+        )
+
+    else:
+        latest_bp = None
+        latest_bp_time = None
+
+
+try:
+    anomaly_result = detect_current_anomaly(
+        health_data
+    )
+
+    mallow_insight = build_anomaly_insight(
+        anomaly_result
+    )
+
+except ValueError:
+    anomaly_result = None
+
+    mallow_insight = (
+        "There is not enough overlapping recent data to evaluate "
+        "today's overall combination yet. Mallow will keep the "
+        "individual measurements available without inventing missing values."
+    )
 
 
 with st.sidebar:
@@ -117,15 +197,37 @@ with st.sidebar:
 
     st.write("")
 
-    view_days = st.selectbox(
-        "View window",
-        options=[
+    if using_apple_health:
+        st.success(
+            "Data source: Apple Health import"
+        )
+
+        view_options = [
+            7,
+            30,
+            90,
+        ]
+
+        view_index = 1
+
+    else:
+        st.caption(
+            "Data source: synthetic demo"
+        )
+
+        view_options = [
             1,
             7,
             30,
             90,
-        ],
-        index=2,
+        ]
+
+        view_index = 2
+
+    view_days = st.selectbox(
+        "View window",
+        options=view_options,
+        index=view_index,
         format_func=lambda days: (
             "Today"
             if days == 1
@@ -133,10 +235,27 @@ with st.sidebar:
         ),
     )
 
-    st.caption(
-        "Today shows measurements throughout the day. "
-        "Longer views show daily trends."
-    )
+    if using_apple_health:
+        st.caption(
+            "Apple Health import mode currently uses daily summaries. "
+            "Intraday Today charts remain available in demo mode."
+        )
+
+        if st.button(
+            "Use demo data",
+            use_container_width=True,
+        ):
+            st.session_state[
+                "mallow_data_source"
+            ] = "demo"
+
+            st.rerun()
+
+    else:
+        st.caption(
+            "Today shows measurements throughout the day. "
+            "Longer views show daily trends."
+        )
 
     st.caption(
         "Personal baseline: previous 30 days"
@@ -144,9 +263,14 @@ with st.sidebar:
 
     st.divider()
 
-    st.caption(
-        "Prototype using synthetic health data."
-    )
+    if using_apple_health:
+        st.caption(
+            "Real imported health data. Missing measurements remain missing."
+        )
+    else:
+        st.caption(
+            "Prototype using synthetic health data."
+        )
 
 
 def status_for(metric):
@@ -168,7 +292,10 @@ def status_style(metric):
     if level == "watch":
         return "watch"
 
-    return "unusual"
+    if level == "unusual":
+        return "unusual"
+
+    return "neutral"
 
 
 def combined_bp_status():
@@ -180,12 +307,39 @@ def combined_bp_status():
         "diastolic_bp"
     )
 
+    if (
+        systolic[
+            "level"
+        ] == "neutral"
+        or diastolic[
+            "level"
+        ] == "neutral"
+        or pd.isna(
+            systolic[
+                "z_score"
+            ]
+        )
+        or pd.isna(
+            diastolic[
+                "z_score"
+            ]
+        )
+    ):
+        return {
+            "label": "No data",
+            "level": "neutral",
+        }
+
     max_z = max(
         abs(
-            systolic["z_score"]
+            systolic[
+                "z_score"
+            ]
         ),
         abs(
-            diastolic["z_score"]
+            diastolic[
+                "z_score"
+            ]
         ),
     )
 
@@ -216,6 +370,90 @@ bp_style = (
     if bp_status["level"] == "typical"
     else bp_status["level"]
 )
+
+
+def format_measurement(
+    value,
+    decimals=1,
+    unit="",
+    signed=False,
+):
+    if (
+        value is None
+        or pd.isna(
+            value
+        )
+    ):
+        return "No data"
+
+    if signed:
+        number = (
+            f"{float(value):+.{decimals}f}"
+        )
+    else:
+        number = (
+            f"{float(value):.{decimals}f}"
+        )
+
+    if unit:
+        return (
+            f"{number} {unit}"
+        )
+
+    return number
+
+
+def format_bp(
+    systolic,
+    diastolic,
+):
+    if (
+        systolic is None
+        or diastolic is None
+        or pd.isna(
+            systolic
+        )
+        or pd.isna(
+            diastolic
+        )
+    ):
+        return "No data"
+
+    return (
+        f"{float(systolic):.0f} / "
+        f"{float(diastolic):.0f}"
+    )
+
+
+def baseline_detail(
+    metric,
+    decimals=1,
+    unit="",
+    signed=False,
+):
+    value = baseline.get(
+        metric,
+        np.nan,
+    )
+
+    if pd.isna(
+        value
+    ):
+        return (
+            "No recent baseline data"
+        )
+
+    return (
+        "30-day baseline: "
+        + format_measurement(
+            value,
+            decimals=decimals,
+            unit=unit,
+            signed=signed,
+        )
+    )
+
+
 
 
 if dark_mode:
@@ -757,11 +995,19 @@ render_html(
 )
 
 
-if view_days == 1:
+if using_apple_health:
+    welcome_text = (
+        f"Showing your imported Apple Health history across the "
+        f"most recent {view_days} days, compared with your "
+        f"30-day personal baseline where enough data exists."
+    )
+
+elif view_days == 1:
     welcome_text = (
         "Here is your synthetic health snapshot so far today. "
         "Measurements update across the intraday timeline."
     )
+
 else:
     welcome_text = (
         f"Showing your recent {view_days}-day health trends "
@@ -791,6 +1037,7 @@ render_html(
     metabolic_tab,
     sleep_tab,
     relationships_tab,
+    apple_health_tab,
 ) = st.tabs(
     [
         "🌿 Overview",
@@ -798,6 +1045,7 @@ render_html(
         "🩸 Blood & metabolic",
         "🌙 Sleep & respiratory",
         "📊 Relationships",
+        "⌚ Apple Health",
     ]
 )
 
@@ -897,9 +1145,10 @@ with overview_tab:
             style = live_style
         else:
             title = "Resting heart rate"
-            detail = (
-                f"30-day baseline: "
-                f"{baseline['resting_hr']:.0f} bpm"
+            detail = baseline_detail(
+                "resting_hr",
+                0,
+                "bpm",
             )
             status = status_for(
                 "resting_hr"
@@ -912,7 +1161,7 @@ with overview_tab:
             metric_card(
                 "❤️",
                 title,
-                f"{current_hr:.0f} bpm",
+                format_measurement(current_hr, 0, "bpm"),
                 detail,
                 status,
                 "⌚ Apple Watch",
@@ -925,17 +1174,22 @@ with overview_tab:
             metric_card(
                 "🩸",
                 "Blood pressure",
-                (
-                    f"{current_systolic:.0f} / "
-                    f"{current_diastolic:.0f}"
-                ),
+                format_bp(current_systolic, current_diastolic),
                 (
                     bp_detail
                     if view_days == 1
                     else (
-                        f"30-day baseline: "
-                        f"{baseline['systolic_bp']:.0f} / "
-                        f"{baseline['diastolic_bp']:.0f}"
+                        "30-day baseline: "
+                        + format_bp(
+                            baseline.get(
+                                "systolic_bp",
+                                np.nan,
+                            ),
+                            baseline.get(
+                                "diastolic_bp",
+                                np.nan,
+                            ),
+                        )
                     )
                 ),
                 (
@@ -957,14 +1211,15 @@ with overview_tab:
             metric_card(
                 "🍬",
                 "Blood glucose",
-                f"{current_glucose:.0f} mg/dL",
+                format_measurement(current_glucose, 0, "mg/dL"),
                 (
                     f"Today's average: "
                     f"{intraday_data['glucose'].mean():.0f} mg/dL"
                     if view_days == 1
-                    else (
-                        f"30-day baseline: "
-                        f"{baseline['glucose']:.0f} mg/dL"
+                    else baseline_detail(
+                        "glucose",
+                        0,
+                        "mg/dL",
                     )
                 ),
                 (
@@ -990,14 +1245,15 @@ with overview_tab:
             metric_card(
                 "🫁",
                 "Oxygen saturation",
-                f"{current_oxygen:.1f}%",
+                format_measurement(current_oxygen, 1, "%"),
                 (
                     f"Today's average: "
                     f"{intraday_data['oxygen_saturation'].mean():.1f}%"
                     if view_days == 1
-                    else (
-                        f"30-day baseline: "
-                        f"{baseline['oxygen_saturation']:.1f}%"
+                    else baseline_detail(
+                        "oxygen_saturation",
+                        1,
+                        "%",
                     )
                 ),
                 (
@@ -1027,14 +1283,15 @@ with overview_tab:
             metric_card(
                 "💓",
                 "HRV",
-                f"{current_hrv:.0f} ms",
+                format_measurement(current_hrv, 0, "ms"),
                 (
                     f"Today's average: "
                     f"{intraday_data['hrv'].mean():.0f} ms"
                     if view_days == 1
-                    else (
-                        f"30-day baseline: "
-                        f"{baseline['hrv']:.0f} ms"
+                    else baseline_detail(
+                        "hrv",
+                        0,
+                        "ms",
                     )
                 ),
                 (
@@ -1060,7 +1317,7 @@ with overview_tab:
             metric_card(
                 "🌡️",
                 "Wrist temperature",
-                f"{current_temp:+.2f} °F",
+                format_measurement(current_temp, 2, "°F", signed=True),
                 (
                     "Synthetic deviation"
                     if view_days == 1
@@ -1091,14 +1348,15 @@ with overview_tab:
             metric_card(
                 "🌬️",
                 "Respiratory rate",
-                f"{current_resp:.1f} / min",
+                format_measurement(current_resp, 1, "/ min"),
                 (
                     f"Today's average: "
                     f"{intraday_data['respiratory_rate'].mean():.1f}"
                     if view_days == 1
-                    else (
-                        f"30-day baseline: "
-                        f"{baseline['respiratory_rate']:.1f}"
+                    else baseline_detail(
+                        "respiratory_rate",
+                        1,
+                        "/ min",
                     )
                 ),
                 (
@@ -1124,13 +1382,14 @@ with overview_tab:
             metric_card(
                 "😴",
                 "Sleep",
-                f"{latest['sleep_hours']:.1f} h",
+                format_measurement(latest.get("sleep_hours", np.nan), 1, "h"),
                 (
                     "Previous synthetic night"
                     if view_days == 1
-                    else (
-                        f"30-day baseline: "
-                        f"{baseline['sleep_hours']:.1f} h"
+                    else baseline_detail(
+                        "sleep_hours",
+                        1,
+                        "h",
                     )
                 ),
                 (
@@ -1744,11 +2003,19 @@ with overview_tab:
     )
 
     if question:
-        answer = ask_mallow(
-            question,
-            health_data,
-            analysis_days=assistant_days,
-        )
+        try:
+            answer = ask_mallow(
+                question,
+                health_data,
+                analysis_days=assistant_days,
+            )
+
+        except ValueError:
+            answer = (
+                "I don't have enough overlapping recent measurements "
+                "for that analysis yet. I can still summarize any "
+                "individual Apple Health measurements that are available."
+            )
 
         render_html(
             f"""
@@ -1790,16 +2057,17 @@ with heart_tab:
                     f"{intraday_latest['heart_rate']:.0f} bpm"
                     if view_days == 1
                     else (
-                        f"{latest['resting_hr']:.0f} bpm"
+                        format_measurement(latest.get("resting_hr", np.nan), 0, "bpm")
                     )
                 ),
                 (
                     f"Today average: "
                     f"{intraday_data['heart_rate'].mean():.0f} bpm"
                     if view_days == 1
-                    else (
-                        f"30-day baseline: "
-                        f"{baseline['resting_hr']:.0f} bpm"
+                    else baseline_detail(
+                        "resting_hr",
+                        0,
+                        "bpm",
                     )
                 ),
                 (
@@ -1829,16 +2097,17 @@ with heart_tab:
                     f"{intraday_latest['hrv']:.0f} ms"
                     if view_days == 1
                     else (
-                        f"{latest['hrv']:.0f} ms"
+                        format_measurement(latest.get("hrv", np.nan), 0, "ms")
                     )
                 ),
                 (
                     f"Today average: "
                     f"{intraday_data['hrv'].mean():.0f} ms"
                     if view_days == 1
-                    else (
-                        f"30-day baseline: "
-                        f"{baseline['hrv']:.0f} ms"
+                    else baseline_detail(
+                        "hrv",
+                        0,
+                        "ms",
                     )
                 ),
                 (
@@ -1911,13 +2180,26 @@ with heart_tab:
             )
 
         else:
-            bp_value = (
-                f"{latest['systolic_bp']:.0f} / "
-                f"{latest['diastolic_bp']:.0f}"
+            bp_value = format_bp(
+                latest.get(
+                    "systolic_bp",
+                    np.nan,
+                ),
+                latest.get(
+                    "diastolic_bp",
+                    np.nan,
+                ),
             )
             bp_detail_text = (
-                f"Pulse pressure: "
-                f"{latest['pulse_pressure']:.0f} mmHg"
+                "Pulse pressure: "
+                + format_measurement(
+                    latest.get(
+                        "pulse_pressure",
+                        np.nan,
+                    ),
+                    0,
+                    "mmHg",
+                )
             )
             bp_label = (
                 bp_status["label"]
@@ -1944,7 +2226,7 @@ with heart_tab:
                 "📊",
                 "Mean arterial pressure",
                 (
-                    f"{latest['map']:.0f} mmHg"
+                    format_measurement(latest.get("map", np.nan), 0, "mmHg")
                 ),
                 "Estimated from cuff measurement",
                 bp_status["label"],
@@ -2155,16 +2437,17 @@ with metabolic_tab:
                     f"{intraday_latest['glucose']:.0f} mg/dL"
                     if view_days == 1
                     else (
-                        f"{latest['glucose']:.0f} mg/dL"
+                        format_measurement(latest.get("glucose", np.nan), 0, "mg/dL")
                     )
                 ),
                 (
                     f"Today average: "
                     f"{intraday_data['glucose'].mean():.0f} mg/dL"
                     if view_days == 1
-                    else (
-                        f"30-day baseline: "
-                        f"{baseline['glucose']:.0f} mg/dL"
+                    else baseline_detail(
+                        "glucose",
+                        0,
+                        "mg/dL",
                     )
                 ),
                 (
@@ -2312,11 +2595,12 @@ with sleep_tab:
                 "😴",
                 "Total sleep",
                 (
-                    f"{latest['sleep_hours']:.1f} h"
+                    format_measurement(latest.get("sleep_hours", np.nan), 1, "h")
                 ),
-                (
-                    f"30-day baseline: "
-                    f"{baseline['sleep_hours']:.1f} h"
+                baseline_detail(
+                    "sleep_hours",
+                    1,
+                    "h",
                 ),
                 status_for(
                     "sleep_hours"
@@ -2334,7 +2618,7 @@ with sleep_tab:
                 "🌙",
                 "Deep sleep",
                 (
-                    f"{latest['deep_sleep_hours']:.1f} h"
+                    format_measurement(latest.get("deep_sleep_hours", np.nan), 1, "h")
                 ),
                 (
                     f"{deep_percent:.0f}% of total sleep"
@@ -2351,7 +2635,7 @@ with sleep_tab:
                 "💭",
                 "REM sleep",
                 (
-                    f"{latest['rem_sleep_hours']:.1f} h"
+                    format_measurement(latest.get("rem_sleep_hours", np.nan), 1, "h")
                 ),
                 (
                     f"{rem_percent:.0f}% of total sleep"
@@ -2392,16 +2676,17 @@ with sleep_tab:
                     f"{intraday_latest['respiratory_rate']:.1f} / min"
                     if view_days == 1
                     else (
-                        f"{latest['respiratory_rate']:.1f} / min"
+                        format_measurement(latest.get("respiratory_rate", np.nan), 1, "/ min")
                     )
                 ),
                 (
                     f"Today average: "
                     f"{intraday_data['respiratory_rate'].mean():.1f}"
                     if view_days == 1
-                    else (
-                        f"30-day baseline: "
-                        f"{baseline['respiratory_rate']:.1f}"
+                    else baseline_detail(
+                        "respiratory_rate",
+                        1,
+                        "/ min",
                     )
                 ),
                 (
@@ -2431,16 +2716,17 @@ with sleep_tab:
                     f"{intraday_latest['oxygen_saturation']:.1f}%"
                     if view_days == 1
                     else (
-                        f"{latest['oxygen_saturation']:.1f}%"
+                        format_measurement(latest.get("oxygen_saturation", np.nan), 1, "%")
                     )
                 ),
                 (
                     f"Today average: "
                     f"{intraday_data['oxygen_saturation'].mean():.1f}%"
                     if view_days == 1
-                    else (
-                        f"30-day baseline: "
-                        f"{baseline['oxygen_saturation']:.1f}%"
+                    else baseline_detail(
+                        "oxygen_saturation",
+                        1,
+                        "%",
                     )
                 ),
                 (
@@ -2470,7 +2756,7 @@ with sleep_tab:
                     f"{intraday_latest['wrist_temperature']:+.2f} °F"
                     if view_days == 1
                     else (
-                        f"{latest['wrist_temperature']:+.2f} °F"
+                        format_measurement(latest.get("wrist_temperature", np.nan), 2, "°F", signed=True)
                     )
                 ),
                 (
@@ -2791,13 +3077,287 @@ with relationships_tab:
                 )
 
 
+
+with apple_health_tab:
+
+    st.subheader(
+        "Apple Health import"
+    )
+
+    st.write(
+        "Import your Apple Health export to see which measurements "
+        "Mallow can read. Missing measurements stay missing — "
+        "Mallow never fills gaps in real health data with synthetic values."
+    )
+
+    st.info(
+        "On iPhone: Health app → your profile picture → "
+        "Export All Health Data. You can upload the resulting ZIP file "
+        "directly here, or upload export.xml from inside the archive."
+    )
+
+    st.warning(
+        "For private personal health data, use Mallow locally on your own "
+        "computer. The public Streamlit demo should remain a synthetic-data "
+        "portfolio demo rather than a place to upload sensitive exports."
+    )
+
+    uploaded_health_file = st.file_uploader(
+        "Upload Apple Health export",
+        type=[
+            "zip",
+            "xml",
+        ],
+        help=(
+            "Apple Health exports may be large. "
+            "Mallow processes the file only for this Streamlit session."
+        ),
+        key="apple_health_export",
+    )
+
+    if uploaded_health_file is None:
+        st.caption(
+            "No Apple Health export loaded yet."
+        )
+
+    else:
+        try:
+            uploaded_bytes = (
+                uploaded_health_file.getvalue()
+            )
+
+            (
+                apple_daily_data,
+                apple_import_info,
+            ) = load_apple_health_export(
+                uploaded_bytes
+            )
+
+        except Exception as exc:
+            st.error(
+                "Mallow could not read this Apple Health export."
+            )
+
+            st.caption(
+                str(
+                    exc
+                )
+            )
+
+        else:
+            st.session_state[
+                "apple_health_data"
+            ] = apple_daily_data.copy()
+
+            st.session_state[
+                "apple_health_info"
+            ] = apple_import_info.copy()
+
+            st.success(
+                "Apple Health export loaded successfully."
+            )
+
+            action_columns = st.columns(
+                2
+            )
+
+            with action_columns[
+                0
+            ]:
+                if st.button(
+                    "Use this data in Mallow",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    st.session_state[
+                        "mallow_data_source"
+                    ] = "apple"
+
+                    st.rerun()
+
+            with action_columns[
+                1
+            ]:
+                if st.button(
+                    "Clear imported data",
+                    use_container_width=True,
+                ):
+                    st.session_state[
+                        "apple_health_data"
+                    ] = None
+
+                    st.session_state[
+                        "apple_health_info"
+                    ] = None
+
+                    st.session_state[
+                        "mallow_data_source"
+                    ] = "demo"
+
+                    st.rerun()
+
+            summary_columns = st.columns(
+                4
+            )
+
+            summary_columns[
+                0
+            ].metric(
+                "Calendar days",
+                apple_import_info[
+                    "calendar_days"
+                ],
+            )
+
+            summary_columns[
+                1
+            ].metric(
+                "Relevant records",
+                apple_import_info[
+                    "relevant_records"
+                ],
+            )
+
+            summary_columns[
+                2
+            ].metric(
+                "Available metrics",
+                len(
+                    apple_import_info[
+                        "available_metrics"
+                    ]
+                ),
+            )
+
+            summary_columns[
+                3
+            ].metric(
+                "Detected sources",
+                len(
+                    apple_import_info[
+                        "source_names"
+                    ]
+                ),
+            )
+
+            st.write(
+                ""
+            )
+
+            st.markdown(
+                "#### Measurements Mallow found"
+            )
+
+            if apple_import_info[
+                "available_metric_names"
+            ]:
+                st.write(
+                    " • ".join(
+                        apple_import_info[
+                            "available_metric_names"
+                        ]
+                    )
+                )
+            else:
+                st.caption(
+                    "No supported measurements were found."
+                )
+
+            if apple_import_info[
+                "unavailable_metric_names"
+            ]:
+                with st.expander(
+                    "Measurements not present in this export"
+                ):
+                    st.write(
+                        " • ".join(
+                            apple_import_info[
+                                "unavailable_metric_names"
+                            ]
+                        )
+                    )
+
+                    st.caption(
+                        "This is normal. Apple Watch models and connected "
+                        "devices do not all record the same measurements."
+                    )
+
+            if apple_import_info[
+                "source_names"
+            ]:
+                with st.expander(
+                    "Detected Health data sources"
+                ):
+                    for source_name in apple_import_info[
+                        "source_names"
+                    ]:
+                        st.write(
+                            f"• {source_name}"
+                        )
+
+            st.markdown(
+                "#### Imported daily data"
+            )
+
+            display_apple_data = (
+                apple_daily_data
+                .sort_values(
+                    "date",
+                    ascending=False,
+                )
+                .reset_index(
+                    drop=True
+                )
+            )
+
+            st.dataframe(
+                display_apple_data,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            csv_data = (
+                display_apple_data
+                .to_csv(
+                    index=False
+                )
+                .encode(
+                    "utf-8"
+                )
+            )
+
+            st.download_button(
+                "Download processed Mallow CSV",
+                data=csv_data,
+                file_name="mallow_apple_health_daily.csv",
+                mime="text/csv",
+            )
+
+            if using_apple_health:
+                st.success(
+                    "The main Mallow dashboard is currently using your "
+                    "imported Apple Health dataset."
+                )
+            else:
+                st.caption(
+                    "Choose “Use this data in Mallow” above to switch the "
+                    "main dashboard from synthetic demo data to this import."
+                )
+
+
 st.write("")
 st.divider()
+
+footer_source_text = (
+    "The active dashboard is using an imported Apple Health dataset."
+    if using_apple_health
+    else "The active dashboard is using synthetic demonstration data."
+)
 
 st.caption(
     "Mallow is a personal health-monitoring project and is not intended "
     "for diagnosis, treatment, or clinical use. Baseline labels describe "
     "statistical differences from personal history, not whether a "
-    "measurement is medically normal. All measurements shown in this "
-    "prototype are synthetic."
+    "measurement is medically normal. "
+    + footer_source_text
 )
