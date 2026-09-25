@@ -1,4 +1,4 @@
-# Mallow 🌿
+# Mallow
 
 [![Mallow Tests](https://github.com/papoochu/mallow-health/actions/workflows/tests.yml/badge.svg)](https://github.com/papoochu/mallow-health/actions/workflows/tests.yml)
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://mallow-health.streamlit.app/)
@@ -94,7 +94,7 @@ The mobile Today screen keeps intraday measurements separate from longer-term da
 
 ---
 
-### 🌱 Personal baseline analysis
+### Personal baseline analysis
 
 Instead of labeling measurements as universally "normal" or "abnormal," Mallow compares recent values with the person's own recent history.
 
@@ -117,7 +117,7 @@ These labels describe distance from recent personal history, not clinical signif
 
 ---
 
-### 📊 Trend intelligence
+### Trend intelligence
 
 Mallow fits a simple least-squares trend across the selected period.
 
@@ -136,7 +136,7 @@ Trend wording explicitly states that recent change is descriptive and **not a pr
 
 ---
 
-### ↔️ Period-to-period comparisons
+### Period-to-period comparisons
 
 Mallow compares a selected period with the equally sized period immediately before it.
 
@@ -151,7 +151,7 @@ It deliberately does not assume that higher or lower automatically means medical
 
 ---
 
-### 🔗 Relationship discovery
+### Relationship discovery
 
 Mallow explores pairwise relationships using Pearson correlation.
 
@@ -170,7 +170,7 @@ Example output:
 
 ---
 
-### 🤖 Statistical anomaly detection
+### Statistical anomaly detection
 
 The web application uses an **Isolation Forest** model from scikit-learn to determine whether the latest multivariate measurement pattern is statistically unusual relative to recent history.
 
@@ -182,7 +182,7 @@ This detects statistical unusualness only. It does not diagnose disease or estim
 
 ---
 
-### 💬 Ask Mallow
+### Ask Mallow
 
 Ask Mallow is a deterministic natural-language interface that routes user questions into the same analytics functions used by the dashboard.
 
@@ -199,7 +199,7 @@ The assistant does not generate unsupported medical interpretations. It selects 
 
 ---
 
-### 🔎 Data support and missingness
+### Data support and missingness
 
 Mallow treats missing measurements as missing.
 
