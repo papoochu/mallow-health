@@ -30,6 +30,27 @@ export type DailyHealthRecord = {
 >;
 
 
+export type IntradayMetricKey =
+  | "heart_rate"
+  | "hrv"
+  | "glucose"
+  | "oxygen_saturation"
+  | "respiratory_rate"
+  | "wrist_temperature"
+  | "systolic_bp"
+  | "diastolic_bp";
+
+
+export type IntradayHealthRecord = {
+  timestamp: string;
+} & Partial<
+  Record<
+    IntradayMetricKey,
+    number | null
+  >
+>;
+
+
 export type MetricTone =
   | "good"
   | "pink"
@@ -83,6 +104,38 @@ export type DashboardData = {
 };
 
 
+export type IntradayPoint = {
+  timestamp: string;
+  value: number;
+};
+
+
+export type TodayMetricSummary = {
+  id: IntradayMetricKey;
+  icon: string;
+  title: string;
+  unit: string;
+  decimals: number;
+  latest: number | null;
+  average: number | null;
+  minimum: number | null;
+  maximum: number | null;
+  sampleCount: number;
+  points: IntradayPoint[];
+  source: string;
+  note?: string;
+};
+
+
+export type TodayData = {
+  sourceLabel: string;
+  lastUpdatedLabel: string;
+  dateLabel: string;
+  totalSampleCount: number;
+  metrics: TodayMetricSummary[];
+};
+
+
 export interface HealthDataService {
   getDashboard(
     windowDays: ViewWindow,
@@ -92,4 +145,6 @@ export interface HealthDataService {
     question: string,
     windowDays: ViewWindow,
   ): Promise<string>;
+
+  getToday?(): Promise<TodayData>;
 }

@@ -7,14 +7,23 @@ import {
 } from "../data/demoGenerator";
 
 import {
+  generateDemoIntradayData,
+} from "../data/demoIntradayGenerator";
+
+import {
   DashboardData,
   HealthDataService,
+  TodayData,
   ViewWindow,
 } from "../models/health";
 
 import {
   buildDashboard,
 } from "./DashboardBuilder";
+
+import {
+  buildTodayData,
+} from "./TodayBuilder";
 
 
 export class DemoHealthService implements HealthDataService {
@@ -35,6 +44,25 @@ export class DemoHealthService implements HealthDataService {
         cardSource: "Demo",
         lastUpdatedLabel: "Calculated locally",
       },
+    );
+  }
+
+
+  async getToday(): Promise<TodayData> {
+    const latestDaily = this.data[
+      this.data.length - 1
+    ];
+
+    const intraday = generateDemoIntradayData(
+      latestDaily,
+      15,
+      84,
+    );
+
+    return buildTodayData(
+      intraday,
+      "Demo intraday data",
+      "Demo",
     );
   }
 

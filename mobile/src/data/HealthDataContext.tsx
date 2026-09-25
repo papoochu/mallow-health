@@ -10,6 +10,7 @@ import React, {
 import {
   DashboardData,
   HealthDataService,
+  TodayData,
   ViewWindow,
 } from "../models/health";
 
@@ -29,9 +30,14 @@ export type HealthSourceMode =
 
 type HealthDataContextValue = {
   data: DashboardData | null;
+  todayData: TodayData | null;
+
   loading: boolean;
+  todayLoading: boolean;
   connecting: boolean;
+
   error: string | null;
+  todayError: string | null;
 
   windowDays: ViewWindow;
 
@@ -43,6 +49,8 @@ type HealthDataContextValue = {
   ) => void;
 
   refresh: () => Promise<void>;
+
+  refreshToday: () => Promise<void>;
 
   ask: (
     question: string
@@ -91,7 +99,15 @@ export function HealthDataProvider({
     null
   );
 
+  const [todayData, setTodayData] = useState<TodayData | null>(
+    null
+  );
+
   const [loading, setLoading] = useState(
+    true
+  );
+
+  const [todayLoading, setTodayLoading] = useState(
     true
   );
 
@@ -104,6 +120,10 @@ export function HealthDataProvider({
   );
 
   const [error, setError] = useState<string | null>(
+    null
+  );
+
+  const [todayError, setTodayError] = useState<string | null>(
     null
   );
 
@@ -154,8 +174,75 @@ export function HealthDataProvider({
   };
 
 
+  const loadTodayFromService = async (
+    service: HealthDataService,
+  ) => {
+    try {
+      setTodayLoading(
+        true
+      );
+
+      setTodayError(
+        null
+      );
+
+      if (
+        service.getToday === undefined
+      ) {
+        setTodayData(
+          null
+        );
+
+        setTodayError(
+          service === deviceService
+            ? (
+              "Intraday device sampling is integration-ready but "
+              + "still pending native iOS validation."
+            )
+            : "Intraday data is not available from this source."
+        );
+
+        return;
+      }
+
+      const nextToday = await service.getToday();
+
+      setTodayData(
+        nextToday
+      );
+    } catch (
+      caught
+    ) {
+      const message = (
+        caught instanceof Error
+          ? caught.message
+          : "Unable to load today's health data."
+      );
+
+      setTodayData(
+        null
+      );
+
+      setTodayError(
+        message
+      );
+    } finally {
+      setTodayLoading(
+        false
+      );
+    }
+  };
+
+
   const refresh = async () => {
     await loadFromService(
+      activeService
+    );
+  };
+
+
+  const refreshToday = async () => {
+    await loadTodayFromService(
       activeService
     );
   };
@@ -194,6 +281,10 @@ export function HealthDataProvider({
       setData(
         nextData
       );
+
+      await loadTodayFromService(
+        deviceService
+      );
     } catch (
       caught
     ) {
@@ -221,8 +312,15 @@ export function HealthDataProvider({
       "demo"
     );
 
-    await loadFromService(
-      demoService
+    await Promise.all(
+      [
+        loadFromService(
+          demoService
+        ),
+        loadTodayFromService(
+          demoService
+        ),
+      ]
     );
   };
 
@@ -260,16 +358,32 @@ export function HealthDataProvider({
   );
 
 
+  useEffect(
+    () => {
+      void loadTodayFromService(
+        activeService
+      );
+    },
+    [
+      sourceMode,
+    ],
+  );
+
+
   const value: HealthDataContextValue = {
     data,
+    todayData,
     loading,
+    todayLoading,
     connecting,
     error,
+    todayError,
     windowDays,
     sourceMode,
     deviceHealthAvailable,
     setWindowDays,
     refresh,
+    refreshToday,
     ask,
     connectDeviceHealth,
     useDemoData,

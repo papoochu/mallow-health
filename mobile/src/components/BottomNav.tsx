@@ -15,6 +15,7 @@ import {
 
 export type TabKey =
   | "home"
+  | "today"
   | "health"
   | "sleep"
   | "ask";
@@ -22,9 +23,11 @@ export type TabKey =
 
 type BottomNavProps = {
   activeTab: TabKey;
+
   onSelect: (
     tab: TabKey
   ) => void;
+
   colors: ThemeColors;
 };
 
@@ -38,6 +41,11 @@ const tabs: Array<{
     key: "home",
     icon: "🌿",
     label: "Home",
+  },
+  {
+    key: "today",
+    icon: "☀️",
+    label: "Today",
   },
   {
     key: "health",
@@ -160,15 +168,16 @@ function createStyles(
         flex: 1,
         gap: 2,
         justifyContent: "center",
+        paddingHorizontal: 2,
         paddingVertical: 10,
       },
 
       icon: {
-        fontSize: 19,
+        fontSize: 18,
       },
 
       label: {
-        fontSize: 11,
+        fontSize: 10,
       },
     }
   );

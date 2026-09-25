@@ -6,7 +6,6 @@ import React, {
 import {
   Platform,
   StatusBar as NativeStatusBar,
-  StyleSheet,
   useColorScheme,
   View,
 } from "react-native";
@@ -27,6 +26,7 @@ import AskScreen from "./src/screens/AskScreen";
 import HealthScreen from "./src/screens/HealthScreen";
 import HomeScreen from "./src/screens/HomeScreen";
 import SleepScreen from "./src/screens/SleepScreen";
+import TodayScreen from "./src/screens/TodayScreen";
 
 import {
   createAppStyles,
@@ -83,6 +83,13 @@ export default function App() {
     switch (
       activeTab
     ) {
+      case "today":
+        return (
+          <TodayScreen
+            {...sharedProps}
+          />
+        );
+
       case "health":
         return (
           <HealthScreen

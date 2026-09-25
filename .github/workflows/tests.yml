@@ -13,8 +13,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Run Mallow unit tests
+  python-tests:
+    name: Python health analytics
     runs-on: ubuntu-latest
 
     steps:
@@ -31,8 +31,33 @@ jobs:
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
 
-      - name: Install dependencies
+      - name: Install Python dependencies
         run: python -m pip install -r requirements.txt
 
-      - name: Run unit tests
+      - name: Run Python unit tests
         run: python run_tests.py
+
+  mobile-tests:
+    name: Mobile TypeScript analytics
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.1"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install mobile dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run mobile analytics tests
+        run: npm test
