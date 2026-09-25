@@ -65,7 +65,7 @@ The native device-health layer is intentionally described as **integration-ready
 
 ## What Mallow can do
 
-### 📈 Multi-timescale health dashboard
+### Multi-timescale health dashboard
 
 Mallow works across several views of the same health history:
 
